@@ -87,6 +87,18 @@ def parse_pool_metrics(pool: dict) -> dict:
     bin_step = int(pool_config.get("bin_step") or 0)
     base_fee_pct = float(pool_config.get("base_fee_pct") or 0)
 
+    # net_deposits = total_deposit_usd - total_withdrawal_usd. Not present in the current
+    # PoolResponse schema (see apis/meteora.py module docstring re: the datapi migration) —
+    # kept as a best-effort lookup in case Meteora adds it later. None -> skip in formatter.
+    if pool.get("net_deposits_usd") is not None:
+        net_deposits = float(pool["net_deposits_usd"])
+    elif pool.get("net_deposit") is not None:
+        net_deposits = float(pool["net_deposit"])
+    elif pool.get("total_deposit_usd") is not None and pool.get("total_withdrawal_usd") is not None:
+        net_deposits = float(pool["total_deposit_usd"]) - float(pool["total_withdrawal_usd"])
+    else:
+        net_deposits = None
+
     return {
         "address": pool.get("address", ""),
         "name": pool.get("name", ""),
@@ -109,6 +121,7 @@ def parse_pool_metrics(pool: dict) -> dict:
         "avg_fees_min": avg_fees_min,
         "avg_vol_min": avg_vol_min,
         "total_lps": None,
+        "net_deposits": net_deposits,
         "current_price": float(pool.get("current_price") or 0),
         # Token metrics the new API already gives us for free (per-token, on the pool object).
         "target_symbol": target_token.get("symbol", ""),

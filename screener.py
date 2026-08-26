@@ -60,6 +60,29 @@ def check_fee_structure(m: dict) -> tuple[bool, list[str]]:
     return len(fails) == 0, fails
 
 
+def classify_net_deposit_signal(net_deposits: float, fees_tvl_pct: float, vol_tvl_pct: float) -> tuple[str, str]:
+    """
+    Returns (signal, label) berdasarkan konteks pool.
+
+    net_deposits: nilai dolar (negatif = withdrawal > deposit)
+    fees_tvl_pct: Fees/Active TVL dalam persen
+    vol_tvl_pct: Volume/Active TVL dalam persen
+
+    Logika:
+    - Net deposits negatif + fees & vol masih tinggi → BULLISH (less competition, pool masih produktif)
+    - Net deposits negatif + fees & vol rendah       → BEARISH (semua keluar, pool sepi)
+    - Net deposits positif                           → NEUTRAL (likuiditas masih masuk)
+    """
+    if net_deposits >= 0:
+        return ("neutral", "➡️ Net Deposit Positif")
+
+    # Net deposit negatif — cek apakah pool masih produktif
+    if fees_tvl_pct >= 8.0 and vol_tvl_pct >= 200.0:
+        return ("bullish", "📉➡️📈 Net Withdraw tapi Pool Masih Aktif (less competition)")
+    else:
+        return ("bearish", "⚠️ Net Withdraw + Volume/Fees Sepi")
+
+
 def run_all_filters(pool_raw: dict, safety: dict, bins: list | None = None) -> dict:
     m = parse_pool_metrics(pool_raw)
     l1_ok, l1_fails = check_token_safety(safety)

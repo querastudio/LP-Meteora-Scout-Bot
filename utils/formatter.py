@@ -1,6 +1,7 @@
 import datetime
 
 import config as C
+from screener import classify_net_deposit_signal
 
 WIB_OFFSET = datetime.timedelta(hours=8)
 
@@ -22,6 +23,12 @@ def fmt_usd(v) -> str:
     if v >= 1_000:
         return f"${v / 1_000:.1f}K"
     return f"${v:.2f}"
+
+
+def fmt_usd_signed(v) -> str:
+    """Signed short USD format for net flow figures, e.g. -$227K, +$15K, +$1.2M."""
+    sign = "-" if v < 0 else "+"
+    return f"{sign}{fmt_usd(abs(v))}"
 
 
 def sig(v, lo, hi=None, rev=False) -> str:
@@ -53,6 +60,11 @@ def build_alert(result: dict) -> str:
     holders = s.get("holders")
     holders_str = f"{holders:,}" if holders is not None else "N/A"
 
+    net_deposits_line = ""
+    if m.get("net_deposits") is not None:
+        _, nd_label = classify_net_deposit_signal(m["net_deposits"], m["fees_tvl_pct"], m["vol_tvl_pct"])
+        net_deposits_line = f"📊 Net Deposits    : {fmt_usd_signed(m['net_deposits'])} {nd_label}\n"
+
     return f"""🟢 <b>POOL ALERT — {sym}/SOL</b>
 ━━━━━━━━━━━━━━━━━━━━━
 🔐 <b>TOKEN SAFETY</b>
@@ -71,7 +83,7 @@ def build_alert(result: dict) -> str:
 💧 Active TVL      : {fmt_usd(m['tvl'])} {sig(m['tvl'], C.MIN_ACTIVE_TVL)}
 💸 Fees/Active TVL : {m['fees_tvl_pct']:.1f}% {sig(m['fees_tvl_pct'], C.MIN_FEES_TVL_PCT)}
 🔄 Vol/Active TVL  : {m['vol_tvl_pct']:.0f}% {sig(m['vol_tvl_pct'], C.MIN_VOL_TVL_PCT, C.MAX_VOL_TVL_PCT)}
-📉 Volatility      : {fmt_num_or_na(m['volatility'])} {sig(m['volatility'], C.MIN_VOLATILITY, C.MAX_VOLATILITY)}
+{net_deposits_line}📉 Volatility      : {fmt_num_or_na(m['volatility'])} {sig(m['volatility'], C.MIN_VOLATILITY, C.MAX_VOLATILITY)}
 🎯 In Range %      : {fmt_num_or_na(m['in_range_pct'], "{:.0f}%")} {sig(m['in_range_pct'], C.MIN_IN_RANGE_PCT)}
 ⚡ Avg Fees/Min    : {fmt_usd(m['avg_fees_min'])} {sig(m['avg_fees_min'], C.MIN_AVG_FEES_MIN)}
 📊 Avg Vol/Min     : {fmt_usd(m['avg_vol_min'])} {sig(m['avg_vol_min'], C.MIN_AVG_VOL_MIN)}
