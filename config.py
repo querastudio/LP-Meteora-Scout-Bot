@@ -27,8 +27,7 @@ MIN_TOTAL_LPS       = int(os.environ.get("MIN_TOTAL_LPS", 10))
 
 MIN_BIN_STEP        = int(os.environ.get("MIN_BIN_STEP", 80))
 MAX_BIN_STEP        = int(os.environ.get("MAX_BIN_STEP", 125))
-MIN_BASE_FEE_PCT    = float(os.environ.get("MIN_BASE_FEE_PCT", 1.0))
-MAX_BASE_FEE_PCT    = float(os.environ.get("MAX_BASE_FEE_PCT", 2.0))
+MIN_BASE_FEE_PCT    = float(os.environ.get("MIN_BASE_FEE_PCT", 1.0))  # no upper bound
 MAX_TOTAL_FEE_PCT   = float(os.environ.get("MAX_TOTAL_FEE_PCT", 3.0))
 MIN_FEES_24H        = float(os.environ.get("MIN_FEES_24H", 500.0))
 MIN_FEES_TVL_24H    = float(os.environ.get("MIN_FEES_TVL_24H", 8.0))

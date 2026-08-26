@@ -51,7 +51,7 @@ def check_fee_structure(m: dict) -> tuple[bool, list[str]]:
     fails = []
     if not (C.MIN_BIN_STEP <= m["bin_step"] <= C.MAX_BIN_STEP):
         fails.append(f"❌ Bin Step {m['bin_step']}")
-    if not (C.MIN_BASE_FEE_PCT <= m["base_fee_pct"] <= C.MAX_BASE_FEE_PCT):
+    if m["base_fee_pct"] < C.MIN_BASE_FEE_PCT:
         fails.append(f"❌ Base Fee {m['base_fee_pct']:.2f}%")
     if m["fees_24h"] < C.MIN_FEES_24H:
         fails.append("❌ 24h Fees rendah")

@@ -80,7 +80,7 @@ def build_alert(result: dict) -> str:
 ⚙️ <b>FEE STRUCTURE</b>
 ━━━━━━━━━━━━━━━━━━━━━
 🪜 Bin Step        : {m['bin_step']} {sig(m['bin_step'], C.MIN_BIN_STEP, C.MAX_BIN_STEP)}
-📋 Base Fee        : {m['base_fee_pct']:.2f}% {sig(m['base_fee_pct'], C.MIN_BASE_FEE_PCT, C.MAX_BASE_FEE_PCT)}
+📋 Base Fee        : {m['base_fee_pct']:.2f}% {sig(m['base_fee_pct'], C.MIN_BASE_FEE_PCT)}
 💰 24h Fees        : {fmt_usd(m['fees_24h'])} {sig(m['fees_24h'], C.MIN_FEES_24H)}
 📊 24h Fees/TVL    : {m['fees_tvl_pct']:.1f}% {sig(m['fees_tvl_pct'], C.MIN_FEES_TVL_24H)}
 ━━━━━━━━━━━━━━━━━━━━━
