@@ -46,7 +46,9 @@ async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict):
     if m["tvl"] < C.MIN_ACTIVE_TVL * 0.5:
         return None
 
-    safety = await get_token_safety(client, m["mint_x"], C.HELIUS_API_KEY, C.MIN_HOLDERS)
+    safety = await get_token_safety(
+        client, m["mint_x"], C.HELIUS_API_KEY, C.MIN_HOLDERS, C.ALCHEMY_API_KEY
+    )
 
     bins = []
     detail = await get_pool_detail(client, m["address"])

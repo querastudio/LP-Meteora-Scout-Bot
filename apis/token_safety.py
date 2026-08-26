@@ -6,14 +6,34 @@ import httpx
 TIMEOUT = 15
 
 
-def _rpc_url(helius_key: str) -> str:
+def _rpc_endpoints(helius_key: str, alchemy_key: str = "") -> list[str]:
+    """Ordered list of Solana RPC endpoints to try: Helius -> Alchemy -> public fallback."""
+    urls = []
     if helius_key:
-        return f"https://mainnet.helius-rpc.com/?api-key={helius_key}"
-    return "https://api.mainnet-beta.solana.com"
+        urls.append(f"https://mainnet.helius-rpc.com/?api-key={helius_key}")
+    if alchemy_key:
+        urls.append(f"https://solana-mainnet.g.alchemy.com/v2/{alchemy_key}")
+    urls.append("https://api.mainnet-beta.solana.com")
+    return urls
 
 
-async def check_mint_freeze(client: httpx.AsyncClient, mint: str, helius_key: str) -> dict:
-    if not helius_key:
+async def _rpc_post(client: httpx.AsyncClient, payload: dict, helius_key: str, alchemy_key: str = "") -> dict | None:
+    """POST an RPC payload, falling through Helius -> Alchemy -> public RPC on failure."""
+    for url in _rpc_endpoints(helius_key, alchemy_key):
+        try:
+            r = await client.post(url, json=payload)
+            r.raise_for_status()
+            data = r.json()
+            if "error" in data:
+                continue
+            return data
+        except Exception:
+            continue
+    return None
+
+
+async def check_mint_freeze(client: httpx.AsyncClient, mint: str, helius_key: str, alchemy_key: str = "") -> dict:
+    if not helius_key and not alchemy_key:
         # No RPC key available -> can't verify, treat as "unknown" (caller skips this filter).
         return {"mint_auth": None, "freeze_auth": None}
     payload = {
@@ -22,33 +42,33 @@ async def check_mint_freeze(client: httpx.AsyncClient, mint: str, helius_key: st
         "method": "getAccountInfo",
         "params": [mint, {"encoding": "jsonParsed"}],
     }
-    try:
-        r = await client.post(_rpc_url(helius_key), json=payload)
-        info = (
-            r.json()
-            .get("result", {})
-            .get("value", {})
-            .get("data", {})
-            .get("parsed", {})
-            .get("info", {})
-        )
-        return {
-            "mint_auth": info.get("mintAuthority") is not None,
-            "freeze_auth": info.get("freezeAuthority") is not None,
-        }
-    except Exception:
+    data = await _rpc_post(client, payload, helius_key, alchemy_key)
+    if data is None:
         return {"mint_auth": None, "freeze_auth": None}
+    info = (
+        data.get("result", {})
+        .get("value", {})
+        .get("data", {})
+        .get("parsed", {})
+        .get("info", {})
+    )
+    return {
+        "mint_auth": info.get("mintAuthority") is not None,
+        "freeze_auth": info.get("freezeAuthority") is not None,
+    }
 
 
 async def get_holders_count(client: httpx.AsyncClient, mint: str, helius_key: str, target: int) -> int | None:
     """Best-effort holder count via Helius DAS getTokenAccounts.
 
-    Returns None when no Helius key is configured (can't check cheaply on public RPC).
+    This is a Helius-specific RPC extension (not standard Solana RPC / DAS core spec), so
+    there is no Alchemy or public-RPC fallback for it — returns None when no Helius key is
+    configured, and the caller then skips the holders filter rather than failing the pool.
     Stops paginating once `target` is reached to keep the call cheap.
     """
     if not helius_key:
         return None
-    url = _rpc_url(helius_key)
+    url = f"https://mainnet.helius-rpc.com/?api-key={helius_key}"
     total = 0
     cursor = None
     try:
@@ -111,37 +131,46 @@ async def get_geckoterminal_data(client: httpx.AsyncClient, mint: str) -> dict:
         return {}
 
 
-async def get_top10_pct(client: httpx.AsyncClient, mint: str, helius_key: str) -> float:
-    url = _rpc_url(helius_key)
+async def get_top10_pct(client: httpx.AsyncClient, mint: str, helius_key: str, alchemy_key: str = "") -> float:
     try:
-        r = await client.post(
-            url,
-            json={
+        data = await _rpc_post(
+            client,
+            {
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "getTokenLargestAccounts",
                 "params": [mint, {"commitment": "confirmed"}],
             },
+            helius_key,
+            alchemy_key,
         )
-        accounts = r.json().get("result", {}).get("value", [])[:10]
+        if data is None:
+            return 100.0
+        accounts = data.get("result", {}).get("value", [])[:10]
         top10 = sum(float(a.get("uiAmount") or 0) for a in accounts)
 
-        rs = await client.post(
-            url,
-            json={"jsonrpc": "2.0", "id": 2, "method": "getTokenSupply", "params": [mint]},
+        supply_data = await _rpc_post(
+            client,
+            {"jsonrpc": "2.0", "id": 2, "method": "getTokenSupply", "params": [mint]},
+            helius_key,
+            alchemy_key,
         )
-        supply = float(rs.json().get("result", {}).get("value", {}).get("uiAmount") or 1)
+        if supply_data is None:
+            return 100.0
+        supply = float(supply_data.get("result", {}).get("value", {}).get("uiAmount") or 1)
         return round(top10 / supply * 100, 2) if supply > 0 else 100.0
     except Exception:
         return 100.0
 
 
-async def get_token_safety(client: httpx.AsyncClient, mint: str, helius_key: str, min_holders: int) -> dict:
+async def get_token_safety(
+    client: httpx.AsyncClient, mint: str, helius_key: str, min_holders: int, alchemy_key: str = ""
+) -> dict:
     dex, gecko, auth, top10, holders = await asyncio.gather(
         get_dexscreener_data(client, mint),
         get_geckoterminal_data(client, mint),
-        check_mint_freeze(client, mint, helius_key),
-        get_top10_pct(client, mint, helius_key),
+        check_mint_freeze(client, mint, helius_key, alchemy_key),
+        get_top10_pct(client, mint, helius_key, alchemy_key),
         get_holders_count(client, mint, helius_key, min_holders),
         return_exceptions=True,
     )
