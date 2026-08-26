@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+cooldown_cache.json
+.env
