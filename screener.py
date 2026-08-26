@@ -49,7 +49,7 @@ def check_pool_metrics(m: dict) -> tuple[bool, list[str]]:
 
 def check_fee_structure(m: dict) -> tuple[bool, list[str]]:
     fails = []
-    if m["bin_step"] > C.MAX_BIN_STEP:
+    if not (C.MIN_BIN_STEP <= m["bin_step"] <= C.MAX_BIN_STEP):
         fails.append(f"❌ Bin Step {m['bin_step']}")
     if not (C.MIN_BASE_FEE_PCT <= m["base_fee_pct"] <= C.MAX_BASE_FEE_PCT):
         fails.append(f"❌ Base Fee {m['base_fee_pct']:.2f}%")

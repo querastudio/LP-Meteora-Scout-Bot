@@ -1,5 +1,7 @@
 import datetime
 
+import config as C
+
 WIB_OFFSET = datetime.timedelta(hours=8)
 
 _BULAN_ID = {
@@ -56,31 +58,31 @@ def build_alert(result: dict) -> str:
 🔐 <b>TOKEN SAFETY</b>
 ━━━━━━━━━━━━━━━━━━━━━
 🏷️ Token       : <b>{sym}</b>
-💰 MCap        : {fmt_usd(s.get('mcap', 0))}
-👥 Holders     : {holders_str}
-📊 Top 10 %    : {s.get('top10_pct', 0):.1f}%
+💰 MCap        : {fmt_usd(s.get('mcap', 0))} {sig(s.get('mcap', 0), C.MIN_MCAP, C.MAX_MCAP)}
+👥 Holders     : {holders_str} {sig(holders, C.MIN_HOLDERS)}
+📊 Top 10 %    : {s.get('top10_pct', 0):.1f}% {sig(s.get('top10_pct', 100), 0, C.MAX_TOP10_PCT)}
 🔒 Mint Auth   : {_auth_str(s.get('mint_auth'))}
 ❄️ Freeze Auth  : {_auth_str(s.get('freeze_auth'))}
-📅 Token Age   : {s.get('token_age_days', 0)} hari
+📅 Token Age   : {s.get('token_age_days', 0)} hari {sig(s.get('token_age_days', 0), C.MIN_TOKEN_AGE_DAYS)}
 ━━━━━━━━━━━━━━━━━━━━━
 📈 <b>POOL METRICS</b>
 ━━━━━━━━━━━━━━━━━━━━━
-🏊 Pool Age        : {m['pool_age_days']} hari {sig(m['pool_age_days'], 3, 20)}
-💧 Active TVL      : {fmt_usd(m['tvl'])}
-💸 Fees/Active TVL : {m['fees_tvl_pct']:.1f}% {sig(m['fees_tvl_pct'], 8)}
-🔄 Vol/Active TVL  : {m['vol_tvl_pct']:.0f}% {sig(m['vol_tvl_pct'], 200, 700)}
-📉 Volatility      : {fmt_num_or_na(m['volatility'])} {sig(m['volatility'], 2, 6)}
-🎯 In Range %      : {fmt_num_or_na(m['in_range_pct'], "{:.0f}%")} {sig(m['in_range_pct'], 40)}
-⚡ Avg Fees/Min    : {fmt_usd(m['avg_fees_min'])}
-📊 Avg Vol/Min     : {fmt_usd(m['avg_vol_min'])}
+🏊 Pool Age        : {m['pool_age_days']} hari {sig(m['pool_age_days'], C.MIN_POOL_AGE_DAYS, C.MAX_POOL_AGE_DAYS)}
+💧 Active TVL      : {fmt_usd(m['tvl'])} {sig(m['tvl'], C.MIN_ACTIVE_TVL)}
+💸 Fees/Active TVL : {m['fees_tvl_pct']:.1f}% {sig(m['fees_tvl_pct'], C.MIN_FEES_TVL_PCT)}
+🔄 Vol/Active TVL  : {m['vol_tvl_pct']:.0f}% {sig(m['vol_tvl_pct'], C.MIN_VOL_TVL_PCT, C.MAX_VOL_TVL_PCT)}
+📉 Volatility      : {fmt_num_or_na(m['volatility'])} {sig(m['volatility'], C.MIN_VOLATILITY, C.MAX_VOLATILITY)}
+🎯 In Range %      : {fmt_num_or_na(m['in_range_pct'], "{:.0f}%")} {sig(m['in_range_pct'], C.MIN_IN_RANGE_PCT)}
+⚡ Avg Fees/Min    : {fmt_usd(m['avg_fees_min'])} {sig(m['avg_fees_min'], C.MIN_AVG_FEES_MIN)}
+📊 Avg Vol/Min     : {fmt_usd(m['avg_vol_min'])} {sig(m['avg_vol_min'], C.MIN_AVG_VOL_MIN)}
 👨‍💼 Total LPs       : {m['total_lps'] if m['total_lps'] is not None else "N/A"}
 ━━━━━━━━━━━━━━━━━━━━━
 ⚙️ <b>FEE STRUCTURE</b>
 ━━━━━━━━━━━━━━━━━━━━━
-🪜 Bin Step        : {m['bin_step']} {sig(m['bin_step'], 0, 100, rev=True)}
-📋 Base Fee        : {m['base_fee_pct']:.2f}% {sig(m['base_fee_pct'], 0.5, 2.0)}
-💰 24h Fees        : {fmt_usd(m['fees_24h'])}
-📊 24h Fees/TVL    : {m['fees_tvl_pct']:.1f}% {sig(m['fees_tvl_pct'], 8)}
+🪜 Bin Step        : {m['bin_step']} {sig(m['bin_step'], C.MIN_BIN_STEP, C.MAX_BIN_STEP)}
+📋 Base Fee        : {m['base_fee_pct']:.2f}% {sig(m['base_fee_pct'], C.MIN_BASE_FEE_PCT, C.MAX_BASE_FEE_PCT)}
+💰 24h Fees        : {fmt_usd(m['fees_24h'])} {sig(m['fees_24h'], C.MIN_FEES_24H)}
+📊 24h Fees/TVL    : {m['fees_tvl_pct']:.1f}% {sig(m['fees_tvl_pct'], C.MIN_FEES_TVL_24H)}
 ━━━━━━━━━━━━━━━━━━━━━
 📊 <b>LIQUIDITY SHAPE</b>
 ━━━━━━━━━━━━━━━━━━━━━
