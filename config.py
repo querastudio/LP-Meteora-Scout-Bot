@@ -34,6 +34,7 @@ MIN_FEES_TVL_24H    = float(os.environ.get("MIN_FEES_TVL_24H", 8.0))
 
 COOLDOWN_HOURS      = int(os.environ.get("COOLDOWN_HOURS", 6))
 MAX_ALERTS_RUN      = int(os.environ.get("MAX_ALERTS_RUN", 5))
+MAX_POOL_PAGES      = int(os.environ.get("MAX_POOL_PAGES", 5))  # pages of 1000 pools each
 
 COOLDOWN_FILE       = "cooldown_cache.json"
 

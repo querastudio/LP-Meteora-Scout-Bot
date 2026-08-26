@@ -26,27 +26,6 @@ jobs:
           key: cooldown-${{ github.run_id }}
           restore-keys: cooldown-
 
-      - name: DEBUG - probe Meteora API endpoints
-        run: |
-          set +e
-          for url in \
-            "https://dlmm-api.meteora.ag/pair/all" \
-            "https://dlmm-api.meteora.ag/pair/all_with_pagination?page=0&limit=2" \
-            "https://dlmm-api.meteora.ag/pair/all_by_groups" \
-            "https://dlmm-api.meteora.ag/" \
-            "https://amm-v2.meteora.ag/pools" \
-            "https://amm-v2.meteora.ag/pair/all" \
-            "https://dammv2-api.meteora.ag/pools" \
-            "https://stats-api.dex.meteora.ag/pair/all" \
-            ; do
-            echo "=== $url ==="
-            code=$(curl -sS -o /tmp/resp.txt -w "%{http_code}" --max-time 15 "$url")
-            echo "HTTP $code"
-            head -c 400 /tmp/resp.txt
-            echo
-            echo
-          done
-
       - name: Run bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

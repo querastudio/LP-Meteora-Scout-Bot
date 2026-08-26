@@ -4,7 +4,7 @@ import asyncio
 import httpx
 
 import config as C
-from apis.meteora import get_all_pools, get_pool_detail, parse_pool_metrics
+from apis.meteora import get_all_pools, parse_pool_metrics
 from apis.token_safety import get_token_safety
 from screener import run_all_filters
 from utils.cooldown import clean_old_entries, is_on_cooldown, load_cache, mark_sent, save_cache
@@ -50,12 +50,20 @@ async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict):
         client, m["mint_x"], C.HELIUS_API_KEY, C.MIN_HOLDERS, C.ALCHEMY_API_KEY
     )
 
-    bins = []
-    detail = await get_pool_detail(client, m["address"])
-    if detail and isinstance(detail.get("bin_arrays"), list):
-        bins = detail["bin_arrays"]
+    # The Meteora datapi already gives us holders/freeze-authority/market-cap on the pool
+    # object itself (per-token) — prefer that over the Helius/DexScreener best-effort values.
+    if m["target_holders"] is not None:
+        safety["holders"] = m["target_holders"]
+    if m["target_freeze_disabled"] is not None:
+        safety["freeze_auth"] = not m["target_freeze_disabled"]
+    if m["target_mcap"]:
+        safety["mcap"] = m["target_mcap"]
+    safety["symbol"] = safety.get("symbol") or m["target_symbol"]
+    safety["name"] = safety.get("name") or m["target_name"]
 
-    result = run_all_filters(pool, safety, bins)
+    # No bin-level liquidity data is exposed by the new datapi /pools endpoint, so the
+    # "Liquidity Shape" bonus check is always skipped (classify_liquidity_shape no-ops on []).
+    result = run_all_filters(pool, safety, bins=[])
     return result
 
 
@@ -64,7 +72,7 @@ async def main():
 
     async with httpx.AsyncClient(timeout=20) as client:
         try:
-            pools = await get_all_pools(client)
+            pools = await get_all_pools(client, max_pages=C.MAX_POOL_PAGES)
         except Exception as e:
             print(f"Failed to fetch pools: {e}")
             return

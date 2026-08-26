@@ -23,8 +23,14 @@ def fmt_usd(v) -> str:
 
 
 def sig(v, lo, hi=None, rev=False) -> str:
+    if v is None:
+        return "⚪"
     ok = (v <= lo if rev else v >= lo) if hi is None else lo <= v <= hi
     return "✅" if ok else "❌"
+
+
+def fmt_num_or_na(v, fmt="{:.2f}%") -> str:
+    return "N/A" if v is None else fmt.format(v)
 
 
 def _auth_str(val) -> str:
@@ -63,11 +69,11 @@ def build_alert(result: dict) -> str:
 💧 Active TVL      : {fmt_usd(m['tvl'])}
 💸 Fees/Active TVL : {m['fees_tvl_pct']:.1f}% {sig(m['fees_tvl_pct'], 8)}
 🔄 Vol/Active TVL  : {m['vol_tvl_pct']:.0f}% {sig(m['vol_tvl_pct'], 200, 700)}
-📉 Volatility      : {m['volatility']:.2f}% {sig(m['volatility'], 2, 6)}
-🎯 In Range %      : {m['in_range_pct']:.0f}% ({m['in_range_pos']}/{m['open_positions']}) {sig(m['in_range_pct'], 40)}
+📉 Volatility      : {fmt_num_or_na(m['volatility'])} {sig(m['volatility'], 2, 6)}
+🎯 In Range %      : {fmt_num_or_na(m['in_range_pct'], "{:.0f}%")} {sig(m['in_range_pct'], 40)}
 ⚡ Avg Fees/Min    : {fmt_usd(m['avg_fees_min'])}
 📊 Avg Vol/Min     : {fmt_usd(m['avg_vol_min'])}
-👨‍💼 Total LPs       : {m['total_lps']}
+👨‍💼 Total LPs       : {m['total_lps'] if m['total_lps'] is not None else "N/A"}
 ━━━━━━━━━━━━━━━━━━━━━
 ⚙️ <b>FEE STRUCTURE</b>
 ━━━━━━━━━━━━━━━━━━━━━

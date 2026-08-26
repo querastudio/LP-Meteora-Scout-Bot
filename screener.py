@@ -28,9 +28,11 @@ def check_pool_metrics(m: dict) -> tuple[bool, list[str]]:
         fails.append(f"❌ Fees/TVL {m['fees_tvl_pct']:.1f}%")
     if not (C.MIN_VOL_TVL_PCT <= m["vol_tvl_pct"] <= C.MAX_VOL_TVL_PCT):
         fails.append(f"❌ Vol/TVL {m['vol_tvl_pct']:.0f}%")
-    if not (C.MIN_VOLATILITY <= m["volatility"] <= C.MAX_VOLATILITY):
+    # volatility, in_range_pct, total_lps: no longer exposed by the Meteora datapi /pools
+    # endpoint. None means "unknown" -> skip rather than fail the pool.
+    if m["volatility"] is not None and not (C.MIN_VOLATILITY <= m["volatility"] <= C.MAX_VOLATILITY):
         fails.append(f"❌ Volatility {m['volatility']:.2f}%")
-    if m["in_range_pct"] < C.MIN_IN_RANGE_PCT:
+    if m["in_range_pct"] is not None and m["in_range_pct"] < C.MIN_IN_RANGE_PCT:
         fails.append(f"❌ In Range {m['in_range_pct']:.0f}%")
     if not (C.MIN_POOL_AGE_DAYS <= m["pool_age_days"] <= C.MAX_POOL_AGE_DAYS):
         fails.append(f"❌ Pool age {m['pool_age_days']}d")
@@ -40,7 +42,7 @@ def check_pool_metrics(m: dict) -> tuple[bool, list[str]]:
         fails.append("❌ Avg Fees/Min rendah")
     if m["avg_vol_min"] < C.MIN_AVG_VOL_MIN:
         fails.append("❌ Avg Vol/Min rendah")
-    if m["total_lps"] < C.MIN_TOTAL_LPS:
+    if m["total_lps"] is not None and m["total_lps"] < C.MIN_TOTAL_LPS:
         fails.append(f"❌ Total LPs {m['total_lps']}")
     return len(fails) == 0, fails
 
