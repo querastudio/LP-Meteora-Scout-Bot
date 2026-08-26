@@ -1,5 +1,6 @@
 name: LP Scout Bot
 
+# Scans Meteora DLMM X/SOL pools every 5 minutes and alerts via Telegram.
 on:
   schedule:
     - cron: '*/5 * * * *'
