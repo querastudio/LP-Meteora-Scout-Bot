@@ -1,9 +1,26 @@
 import os
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.environ.get(name, "").strip()
+    if not val:
+        # Unset, or set to "" (e.g. an unconfigured GitHub Actions `vars.*` resolves to
+        # an empty string rather than being absent) -> fall back to the default.
+        return default
+    return val.lower() in ("1", "true", "yes", "on")
+
+
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 HELIUS_API_KEY      = os.environ.get("HELIUS_API_KEY", "")
 ALCHEMY_API_KEY     = os.environ.get("ALCHEMY_API_KEY", "")
+
+# Feature toggles — matikan salah satu buat hemat kuota RPC (Helius/Alchemy) kalau tidak
+# perlu. Kalau dimatikan, filter terkait otomatis di-skip (tidak pernah reject pool),
+# bukan bikin bot crash. Semua default ON (perilaku sama seperti sebelum toggle ini ada).
+ENABLE_MINT_FREEZE_CHECK = _env_bool("ENABLE_MINT_FREEZE_CHECK", True)  # 1x getAccountInfo/pool
+ENABLE_TOP10_CHECK       = _env_bool("ENABLE_TOP10_CHECK", True)        # 2x RPC call/pool
+ENABLE_HOLDERS_CHECK     = _env_bool("ENABLE_HOLDERS_CHECK", True)      # s/d 10x RPC call/pool (paling boros)
 
 MIN_MCAP            = int(os.environ.get("MIN_MCAP", 100_000))
 MAX_MCAP            = int(os.environ.get("MAX_MCAP", 2_000_000))

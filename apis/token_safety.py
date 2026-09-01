@@ -32,9 +32,12 @@ async def _rpc_post(client: httpx.AsyncClient, payload: dict, helius_key: str, a
     return None
 
 
-async def check_mint_freeze(client: httpx.AsyncClient, mint: str, helius_key: str, alchemy_key: str = "") -> dict:
-    if not helius_key and not alchemy_key:
-        # No RPC key available -> can't verify, treat as "unknown" (caller skips this filter).
+async def check_mint_freeze(
+    client: httpx.AsyncClient, mint: str, helius_key: str, alchemy_key: str = "", enabled: bool = True
+) -> dict:
+    if not enabled or (not helius_key and not alchemy_key):
+        # Disabled (feature toggle) or no RPC key available -> can't verify, treat as
+        # "unknown" (caller skips this filter).
         return {"mint_auth": None, "freeze_auth": None}
     payload = {
         "jsonrpc": "2.0",
@@ -58,15 +61,19 @@ async def check_mint_freeze(client: httpx.AsyncClient, mint: str, helius_key: st
     }
 
 
-async def get_holders_count(client: httpx.AsyncClient, mint: str, helius_key: str, target: int) -> int | None:
+async def get_holders_count(
+    client: httpx.AsyncClient, mint: str, helius_key: str, target: int, enabled: bool = True
+) -> int | None:
     """Best-effort holder count via Helius DAS getTokenAccounts.
 
     This is a Helius-specific RPC extension (not standard Solana RPC / DAS core spec), so
     there is no Alchemy or public-RPC fallback for it — returns None when no Helius key is
     configured, and the caller then skips the holders filter rather than failing the pool.
-    Stops paginating once `target` is reached to keep the call cheap.
+    Stops paginating once `target` is reached to keep the call cheap. This is by far the
+    most RPC-expensive check (up to 10 paginated calls per token), so it can be disabled
+    independently via the `enabled` flag.
     """
-    if not helius_key:
+    if not enabled or not helius_key:
         return None
     url = f"https://mainnet.helius-rpc.com/?api-key={helius_key}"
     total = 0
@@ -131,7 +138,11 @@ async def get_geckoterminal_data(client: httpx.AsyncClient, mint: str) -> dict:
         return {}
 
 
-async def get_top10_pct(client: httpx.AsyncClient, mint: str, helius_key: str, alchemy_key: str = "") -> float:
+async def get_top10_pct(
+    client: httpx.AsyncClient, mint: str, helius_key: str, alchemy_key: str = "", enabled: bool = True
+) -> float | None:
+    if not enabled:
+        return None
     try:
         data = await _rpc_post(
             client,
@@ -164,20 +175,27 @@ async def get_top10_pct(client: httpx.AsyncClient, mint: str, helius_key: str, a
 
 
 async def get_token_safety(
-    client: httpx.AsyncClient, mint: str, helius_key: str, min_holders: int, alchemy_key: str = ""
+    client: httpx.AsyncClient,
+    mint: str,
+    helius_key: str,
+    min_holders: int,
+    alchemy_key: str = "",
+    enable_mint_freeze_check: bool = True,
+    enable_top10_check: bool = True,
+    enable_holders_check: bool = True,
 ) -> dict:
     dex, gecko, auth, top10, holders = await asyncio.gather(
         get_dexscreener_data(client, mint),
         get_geckoterminal_data(client, mint),
-        check_mint_freeze(client, mint, helius_key, alchemy_key),
-        get_top10_pct(client, mint, helius_key, alchemy_key),
-        get_holders_count(client, mint, helius_key, min_holders),
+        check_mint_freeze(client, mint, helius_key, alchemy_key, enable_mint_freeze_check),
+        get_top10_pct(client, mint, helius_key, alchemy_key, enable_top10_check),
+        get_holders_count(client, mint, helius_key, min_holders, enable_holders_check),
         return_exceptions=True,
     )
     dex = dex if isinstance(dex, dict) else {}
     gecko = gecko if isinstance(gecko, dict) else {}
     auth = auth if isinstance(auth, dict) else {"mint_auth": None, "freeze_auth": None}
-    top10 = top10 if isinstance(top10, float) else 100.0
+    top10 = top10 if isinstance(top10, float) else None
     holders = holders if isinstance(holders, int) else None
 
     return {

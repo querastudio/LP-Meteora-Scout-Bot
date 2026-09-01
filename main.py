@@ -5,10 +5,12 @@ import httpx
 
 import config as C
 from apis.meteora import get_all_pools, parse_pool_metrics
+from apis.telegram_commands import process_commands
 from apis.token_safety import get_token_safety
 from screener import run_all_filters
 from utils.cooldown import clean_old_entries, is_on_cooldown, load_cache, mark_sent, save_cache
 from utils.formatter import build_alert, build_summary
+from utils.state import load_state, save_state
 
 TELEGRAM_API = f"https://api.telegram.org/bot{C.TELEGRAM_BOT_TOKEN}"
 BATCH_SIZE = 20
@@ -47,7 +49,14 @@ async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict):
         return None
 
     safety = await get_token_safety(
-        client, m["mint_x"], C.HELIUS_API_KEY, C.MIN_HOLDERS, C.ALCHEMY_API_KEY
+        client,
+        m["mint_x"],
+        C.HELIUS_API_KEY,
+        C.MIN_HOLDERS,
+        C.ALCHEMY_API_KEY,
+        enable_mint_freeze_check=C.ENABLE_MINT_FREEZE_CHECK,
+        enable_top10_check=C.ENABLE_TOP10_CHECK,
+        enable_holders_check=C.ENABLE_HOLDERS_CHECK,
     )
 
     # The Meteora datapi already gives us holders/freeze-authority/market-cap on the pool
@@ -68,9 +77,17 @@ async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict):
 
 
 async def main():
+    state = load_state()
     cache = clean_old_entries(load_cache())
 
     async with httpx.AsyncClient(timeout=20) as client:
+        await process_commands(client, C.TELEGRAM_BOT_TOKEN, C.TELEGRAM_CHAT_ID, state)
+        save_state(state)
+
+        if state.get("paused"):
+            print("Bot is paused (send /resume in Telegram to continue). Skipping scan.")
+            return
+
         try:
             pools = await get_all_pools(client, max_pages=C.MAX_POOL_PAGES)
         except Exception as e:

@@ -27,7 +27,9 @@ jobs:
 
       - uses: actions/cache@v4
         with:
-          path: cooldown_cache.json
+          path: |
+            cooldown_cache.json
+            bot_state.json
           key: cooldown-${{ github.run_id }}
           restore-keys: cooldown-
 
@@ -45,4 +47,7 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           HELIUS_API_KEY:     ${{ secrets.HELIUS_API_KEY }}
           ALCHEMY_API_KEY:    ${{ secrets.ALCHEMY_API_KEY }}
+          ENABLE_MINT_FREEZE_CHECK: ${{ vars.ENABLE_MINT_FREEZE_CHECK }}
+          ENABLE_TOP10_CHECK:       ${{ vars.ENABLE_TOP10_CHECK }}
+          ENABLE_HOLDERS_CHECK:     ${{ vars.ENABLE_HOLDERS_CHECK }}
         run: python main.py

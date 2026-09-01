@@ -59,6 +59,8 @@ def build_alert(result: dict) -> str:
 
     holders = s.get("holders")
     holders_str = f"{holders:,}" if holders is not None else "N/A"
+    top10_pct = s.get("top10_pct")
+    top10_str = f"{top10_pct:.1f}%" if top10_pct is not None else "N/A"
 
     net_deposits_line = ""
     if m.get("net_deposits") is not None:
@@ -72,7 +74,7 @@ def build_alert(result: dict) -> str:
 🏷️ Token       : <b>{sym}</b>
 💰 MCap        : {fmt_usd(s.get('mcap', 0))} {sig(s.get('mcap', 0), C.MIN_MCAP, C.MAX_MCAP)}
 👥 Holders     : {holders_str} {sig(holders, C.MIN_HOLDERS)}
-📊 Top 10 %    : {s.get('top10_pct', 0):.1f}% {sig(s.get('top10_pct', 100), 0, C.MAX_TOP10_PCT)}
+📊 Top 10 %    : {top10_str} {sig(top10_pct, 0, C.MAX_TOP10_PCT)}
 🔒 Mint Auth   : {_auth_str(s.get('mint_auth'))}
 ❄️ Freeze Auth  : {_auth_str(s.get('freeze_auth'))}
 📅 Token Age   : {s.get('token_age_days', 0)} hari {sig(s.get('token_age_days', 0), C.MIN_TOKEN_AGE_DAYS)}

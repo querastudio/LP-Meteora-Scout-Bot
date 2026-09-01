@@ -12,7 +12,8 @@ def check_token_safety(s: dict) -> tuple[bool, list[str]]:
         fails.append("❌ MCap terlalu kecil")
     if s.get("mcap", 0) > C.MAX_MCAP:
         fails.append("❌ MCap terlalu besar")
-    if s.get("top10_pct", 100) > C.MAX_TOP10_PCT:
+    top10_pct = s.get("top10_pct")
+    if top10_pct is not None and top10_pct > C.MAX_TOP10_PCT:
         fails.append("❌ Top 10 terkonsentrasi")
     if s.get("token_age_days", 0) < C.MIN_TOKEN_AGE_DAYS:
         fails.append("❌ Token terlalu baru")
