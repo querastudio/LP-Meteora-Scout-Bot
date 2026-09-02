@@ -7,18 +7,23 @@ TIMEOUT = 15
 
 
 def _rpc_endpoints(helius_key: str, alchemy_key: str = "") -> list[str]:
-    """Ordered list of Solana RPC endpoints to try: Helius -> Alchemy -> public fallback."""
+    """Ordered list of Solana RPC endpoints to try: Alchemy -> Helius -> public fallback.
+
+    Alchemy is tried first (primary provider). Helius is kept as a fallback so a bad/test
+    HELIUS_API_KEY (or none at all) never blocks these checks — it only gets used if Alchemy
+    is unavailable or fails.
+    """
     urls = []
-    if helius_key:
-        urls.append(f"https://mainnet.helius-rpc.com/?api-key={helius_key}")
     if alchemy_key:
         urls.append(f"https://solana-mainnet.g.alchemy.com/v2/{alchemy_key}")
+    if helius_key:
+        urls.append(f"https://mainnet.helius-rpc.com/?api-key={helius_key}")
     urls.append("https://api.mainnet-beta.solana.com")
     return urls
 
 
 async def _rpc_post(client: httpx.AsyncClient, payload: dict, helius_key: str, alchemy_key: str = "") -> dict | None:
-    """POST an RPC payload, falling through Helius -> Alchemy -> public RPC on failure."""
+    """POST an RPC payload, falling through Alchemy -> Helius -> public RPC on failure."""
     for url in _rpc_endpoints(helius_key, alchemy_key):
         try:
             r = await client.post(url, json=payload)
