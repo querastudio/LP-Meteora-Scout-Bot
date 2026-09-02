@@ -10,6 +10,10 @@ on:
         description: "Send a sample POOL ALERT to Telegram instead of scanning (preview format)"
         type: boolean
         default: false
+      test_rpc:
+        description: "Test Alchemy/Helius RPC connectivity instead of scanning (prints result to log)"
+        type: boolean
+        default: false
 
 jobs:
   scan:
@@ -40,8 +44,17 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python send_test_alert.py
 
+      - name: Test RPC connectivity (manual only)
+        if: github.event_name == 'workflow_dispatch' && inputs.test_rpc == true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          HELIUS_API_KEY:     ${{ secrets.HELIUS_API_KEY }}
+          ALCHEMY_API_KEY:    ${{ secrets.ALCHEMY_API_KEY }}
+        run: python test_rpc.py
+
       - name: Run bot
-        if: github.event_name != 'workflow_dispatch' || inputs.send_test_alert != true
+        if: github.event_name != 'workflow_dispatch' || (inputs.send_test_alert != true && inputs.test_rpc != true)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
