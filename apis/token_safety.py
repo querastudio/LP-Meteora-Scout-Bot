@@ -22,18 +22,38 @@ def _rpc_endpoints(helius_key: str, alchemy_key: str = "") -> list[str]:
     return urls
 
 
-async def _rpc_post(client: httpx.AsyncClient, payload: dict, helius_key: str, alchemy_key: str = "") -> dict | None:
-    """POST an RPC payload, falling through Alchemy -> Helius -> public RPC on failure."""
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+async def _rpc_post(
+    client: httpx.AsyncClient, payload: dict, helius_key: str, alchemy_key: str = "", max_retries: int = 2
+) -> dict | None:
+    """POST an RPC payload, falling through Alchemy -> Helius -> public RPC on failure.
+
+    Transient errors (429/5xx — e.g. Alchemy's "-32001 Unable to complete request at this
+    time", or a rate-limited public RPC) are retried a couple times with a short backoff on
+    the *same* endpoint before giving up and moving to the next one. A hard failure (401/403,
+    a non-retryable RPC error) moves straight to the next endpoint without retrying.
+    """
     for url in _rpc_endpoints(helius_key, alchemy_key):
-        try:
-            r = await client.post(url, json=payload)
-            r.raise_for_status()
-            data = r.json()
-            if "error" in data:
-                continue
-            return data
-        except Exception:
-            continue
+        for attempt in range(max_retries + 1):
+            try:
+                r = await client.post(url, json=payload)
+                if r.status_code in _RETRYABLE_STATUS and attempt < max_retries:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                r.raise_for_status()
+                data = r.json()
+                if "error" in data:
+                    break  # RPC-level error (e.g. bad key) -> try the next endpoint
+                return data
+            except httpx.HTTPStatusError:
+                break  # non-retryable HTTP status -> next endpoint
+            except Exception:
+                if attempt < max_retries:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                break
     return None
 
 
