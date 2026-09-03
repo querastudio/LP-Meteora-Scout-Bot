@@ -57,6 +57,7 @@ async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict):
         enable_mint_freeze_check=C.ENABLE_MINT_FREEZE_CHECK,
         enable_top10_check=C.ENABLE_TOP10_CHECK,
         enable_holders_check=C.ENABLE_HOLDERS_CHECK,
+        birdeye_key=C.BIRDEYE_API_KEY,
     )
 
     # The Meteora datapi already gives us holders/freeze-authority/market-cap on the pool

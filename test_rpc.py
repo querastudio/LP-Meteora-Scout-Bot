@@ -10,7 +10,7 @@ import json
 import httpx
 
 import config as C
-from apis.token_safety import _rpc_endpoints, check_mint_freeze, get_top10_pct
+from apis.token_safety import _rpc_endpoints, check_mint_freeze, get_top10_pct, _get_top10_amount_birdeye
 
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
@@ -70,16 +70,34 @@ async def main():
 
     print("\nDone. Look above for the first endpoint where getTokenLargestAccounts/getTokenSupply return 'OK' with real data.")
 
-    print("\n=== Now testing the actual production path (with retry logic) ===")
+    if C.BIRDEYE_API_KEY:
+        print("\n--- Birdeye raw probe -> https://public-api.birdeye.so/defi/v3/token/holder")
+        async with httpx.AsyncClient(timeout=15) as client:
+            try:
+                r = await client.get(
+                    "https://public-api.birdeye.so/defi/v3/token/holder",
+                    params={"address": USDC_MINT, "offset": 0, "limit": 10, "mode": "wallet"},
+                    headers={"X-API-KEY": C.BIRDEYE_API_KEY, "x-chain": "solana", "accept": "application/json"},
+                )
+                print(f"    HTTP {r.status_code}")
+                print(f"    body: {r.text[:500]}")
+            except Exception as e:
+                print(f"    Exception: {type(e).__name__}: {e}")
+    else:
+        print("\n(BIRDEYE_API_KEY not set — skipping Birdeye probe)")
+
+    print("\n=== Now testing the actual production path (Birdeye -> RPC fallback) ===")
     async with httpx.AsyncClient(timeout=15) as client:
         auth = await check_mint_freeze(client, USDC_MINT, C.HELIUS_API_KEY, C.ALCHEMY_API_KEY, enabled=True)
         print("check_mint_freeze:", auth)
-        top10 = await get_top10_pct(client, USDC_MINT, C.HELIUS_API_KEY, C.ALCHEMY_API_KEY, enabled=True)
+        top10 = await get_top10_pct(
+            client, USDC_MINT, C.HELIUS_API_KEY, C.ALCHEMY_API_KEY, enabled=True, birdeye_key=C.BIRDEYE_API_KEY
+        )
         print("get_top10_pct:", top10)
-        if top10 is not None and top10 != 100.0:
-            print(f"\n✅ Retry fix worked — got a real top-10 concentration ({top10}%), not the 100.0 fail-safe.")
+        if top10 is not None:
+            print(f"\n✅ Got a real top-10 concentration ({top10}%) instead of the None/skip fallback.")
         else:
-            print("\n⚠️  Still getting the fail-safe value — every endpoint failed even with retries.")
+            print("\n⚠️  Still None — both Birdeye and RPC getTokenLargestAccounts failed.")
 
 
 if __name__ == "__main__":

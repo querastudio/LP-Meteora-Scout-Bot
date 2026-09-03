@@ -163,12 +163,62 @@ async def get_geckoterminal_data(client: httpx.AsyncClient, mint: str) -> dict:
         return {}
 
 
-async def get_top10_pct(
-    client: httpx.AsyncClient, mint: str, helius_key: str, alchemy_key: str = "", enabled: bool = True
-) -> float | None:
-    if not enabled:
+async def _get_top10_amount_birdeye(client: httpx.AsyncClient, mint: str, birdeye_key: str) -> float | None:
+    """Top-10 holder amount via Birdeye's Token Holder List API, grouped by wallet.
+
+    Used as the primary source for top10_pct: Solana's getTokenLargestAccounts RPC method
+    has been observed failing persistently (503 "-32001 Unable to complete request at this
+    time" on Alchemy, 429 on the public RPC) — Birdeye avoids that RPC method entirely.
+    """
+    if not birdeye_key:
         return None
     try:
+        r = await client.get(
+            "https://public-api.birdeye.so/defi/v3/token/holder",
+            params={"address": mint, "offset": 0, "limit": 10, "mode": "wallet"},
+            headers={"X-API-KEY": birdeye_key, "x-chain": "solana", "accept": "application/json"},
+        )
+        r.raise_for_status()
+        body = r.json()
+        items = (body.get("data") or {}).get("items") or []
+        if not items:
+            return None
+        return sum(float(i.get("ui_amount") or i.get("uiAmount") or 0) for i in items)
+    except Exception:
+        return None
+
+
+async def get_top10_pct(
+    client: httpx.AsyncClient,
+    mint: str,
+    helius_key: str,
+    alchemy_key: str = "",
+    enabled: bool = True,
+    birdeye_key: str = "",
+) -> float | None:
+    """Top-10 holder concentration, as a percentage of total supply.
+
+    Tries Birdeye first (if BIRDEYE_API_KEY is configured) since it doesn't depend on the
+    RPC-only getTokenLargestAccounts method, which has proven unreliable across providers.
+    Falls back to the RPC method if Birdeye isn't configured or fails. Returns None (not a
+    worst-case 100.0) when genuinely unable to determine it — the caller skips the filter
+    rather than treating "we don't know" as "definitely concentrated".
+    """
+    if not enabled:
+        return None
+
+    supply_data = await _rpc_post(
+        client, {"jsonrpc": "2.0", "id": 2, "method": "getTokenSupply", "params": [mint]}, helius_key, alchemy_key
+    )
+    supply = None
+    if supply_data is not None:
+        supply = float(supply_data.get("result", {}).get("value", {}).get("uiAmount") or 0)
+    if not supply:
+        return None
+
+    top10 = await _get_top10_amount_birdeye(client, mint, birdeye_key)
+
+    if top10 is None:
         data = await _rpc_post(
             client,
             {
@@ -180,23 +230,13 @@ async def get_top10_pct(
             helius_key,
             alchemy_key,
         )
-        if data is None:
-            return 100.0
-        accounts = data.get("result", {}).get("value", [])[:10]
-        top10 = sum(float(a.get("uiAmount") or 0) for a in accounts)
+        if data is not None:
+            accounts = data.get("result", {}).get("value", [])[:10]
+            top10 = sum(float(a.get("uiAmount") or 0) for a in accounts)
 
-        supply_data = await _rpc_post(
-            client,
-            {"jsonrpc": "2.0", "id": 2, "method": "getTokenSupply", "params": [mint]},
-            helius_key,
-            alchemy_key,
-        )
-        if supply_data is None:
-            return 100.0
-        supply = float(supply_data.get("result", {}).get("value", {}).get("uiAmount") or 1)
-        return round(top10 / supply * 100, 2) if supply > 0 else 100.0
-    except Exception:
-        return 100.0
+    if top10 is None:
+        return None
+    return round(top10 / supply * 100, 2)
 
 
 async def get_token_safety(
@@ -208,12 +248,13 @@ async def get_token_safety(
     enable_mint_freeze_check: bool = True,
     enable_top10_check: bool = True,
     enable_holders_check: bool = True,
+    birdeye_key: str = "",
 ) -> dict:
     dex, gecko, auth, top10, holders = await asyncio.gather(
         get_dexscreener_data(client, mint),
         get_geckoterminal_data(client, mint),
         check_mint_freeze(client, mint, helius_key, alchemy_key, enable_mint_freeze_check),
-        get_top10_pct(client, mint, helius_key, alchemy_key, enable_top10_check),
+        get_top10_pct(client, mint, helius_key, alchemy_key, enable_top10_check, birdeye_key),
         get_holders_count(client, mint, helius_key, min_holders, enable_holders_check),
         return_exceptions=True,
     )

@@ -51,6 +51,7 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           HELIUS_API_KEY:     ${{ secrets.HELIUS_API_KEY }}
           ALCHEMY_API_KEY:    ${{ secrets.ALCHEMY_API_KEY }}
+          BIRDEYE_API_KEY:    ${{ secrets.BIRDEYE_API_KEY }}
         run: python test_rpc.py
 
       - name: Run bot
@@ -60,6 +61,7 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           HELIUS_API_KEY:     ${{ secrets.HELIUS_API_KEY }}
           ALCHEMY_API_KEY:    ${{ secrets.ALCHEMY_API_KEY }}
+          BIRDEYE_API_KEY:    ${{ secrets.BIRDEYE_API_KEY }}
           ENABLE_MINT_FREEZE_CHECK: ${{ vars.ENABLE_MINT_FREEZE_CHECK }}
           ENABLE_TOP10_CHECK:       ${{ vars.ENABLE_TOP10_CHECK }}
           ENABLE_HOLDERS_CHECK:     ${{ vars.ENABLE_HOLDERS_CHECK }}

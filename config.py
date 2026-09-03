@@ -14,6 +14,7 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 HELIUS_API_KEY      = os.environ.get("HELIUS_API_KEY", "")
 ALCHEMY_API_KEY     = os.environ.get("ALCHEMY_API_KEY", "")
+BIRDEYE_API_KEY     = os.environ.get("BIRDEYE_API_KEY", "")  # optional, used for top10_pct
 
 # Feature toggles — matikan salah satu buat hemat kuota RPC (Helius/Alchemy) kalau tidak
 # perlu. Kalau dimatikan, filter terkait otomatis di-skip (tidak pernah reject pool),
