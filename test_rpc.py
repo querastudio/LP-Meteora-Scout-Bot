@@ -10,7 +10,7 @@ import json
 import httpx
 
 import config as C
-from apis.token_safety import _rpc_endpoints
+from apis.token_safety import _rpc_endpoints, check_mint_freeze, get_top10_pct
 
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
@@ -69,6 +69,17 @@ async def main():
             await probe(client, f"{label} getTokenSupply", url, supply_payload)
 
     print("\nDone. Look above for the first endpoint where getTokenLargestAccounts/getTokenSupply return 'OK' with real data.")
+
+    print("\n=== Now testing the actual production path (with retry logic) ===")
+    async with httpx.AsyncClient(timeout=15) as client:
+        auth = await check_mint_freeze(client, USDC_MINT, C.HELIUS_API_KEY, C.ALCHEMY_API_KEY, enabled=True)
+        print("check_mint_freeze:", auth)
+        top10 = await get_top10_pct(client, USDC_MINT, C.HELIUS_API_KEY, C.ALCHEMY_API_KEY, enabled=True)
+        print("get_top10_pct:", top10)
+        if top10 is not None and top10 != 100.0:
+            print(f"\n✅ Retry fix worked — got a real top-10 concentration ({top10}%), not the 100.0 fail-safe.")
+        else:
+            print("\n⚠️  Still getting the fail-safe value — every endpoint failed even with retries.")
 
 
 if __name__ == "__main__":
