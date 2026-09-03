@@ -34,6 +34,7 @@ jobs:
           path: |
             cooldown_cache.json
             bot_state.json
+            token_safety_cache.json
           key: cooldown-${{ github.run_id }}
           restore-keys: cooldown-
 

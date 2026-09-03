@@ -11,6 +11,8 @@ from screener import run_all_filters
 from utils.cooldown import clean_old_entries, is_on_cooldown, load_cache, mark_sent, save_cache
 from utils.formatter import build_alert, build_summary
 from utils.state import load_state, save_state
+from utils.token_safety_cache import get_cached_top10, load_cache as load_top10_cache, prune as prune_top10_cache
+from utils.token_safety_cache import save_cache as save_top10_cache, set_cached_top10
 
 TELEGRAM_API = f"https://api.telegram.org/bot{C.TELEGRAM_BOT_TOKEN}"
 BATCH_SIZE = 20
@@ -32,7 +34,7 @@ async def send_telegram(client: httpx.AsyncClient, text: str):
         print(f"Telegram send failed: {e}")
 
 
-async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict):
+async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict, top10_cache: dict):
     m = parse_pool_metrics(pool)
 
     if m["mint_y"].lower() != C.SOL_MINT.lower():
@@ -48,6 +50,11 @@ async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict):
     if m["tvl"] < C.MIN_ACTIVE_TVL * 0.5:
         return None
 
+    # Holder concentration barely moves minute to minute — reuse a cached value instead of
+    # burning a Birdeye call (35 CU each) on every 5-minute scan for the same token.
+    cached_top10 = get_cached_top10(top10_cache, m["mint_x"], C.TOP10_CACHE_TTL_HOURS)
+    fetch_top10 = C.ENABLE_TOP10_CHECK and cached_top10 is None
+
     safety = await get_token_safety(
         client,
         m["mint_x"],
@@ -55,10 +62,15 @@ async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict):
         C.MIN_HOLDERS,
         C.ALCHEMY_API_KEY,
         enable_mint_freeze_check=C.ENABLE_MINT_FREEZE_CHECK,
-        enable_top10_check=C.ENABLE_TOP10_CHECK,
+        enable_top10_check=fetch_top10,
         enable_holders_check=C.ENABLE_HOLDERS_CHECK,
         birdeye_key=C.BIRDEYE_API_KEY,
     )
+
+    if cached_top10 is not None:
+        safety["top10_pct"] = cached_top10
+    elif safety.get("top10_pct") is not None:
+        set_cached_top10(top10_cache, m["mint_x"], safety["top10_pct"])
 
     # The Meteora datapi already gives us holders/freeze-authority/market-cap on the pool
     # object itself (per-token) — prefer that over the Helius/DexScreener best-effort values.
@@ -80,6 +92,7 @@ async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict):
 async def main():
     state = load_state()
     cache = clean_old_entries(load_cache())
+    top10_cache = prune_top10_cache(load_top10_cache(), max_age_hours=C.TOP10_CACHE_TTL_HOURS * 2)
 
     async with httpx.AsyncClient(timeout=20) as client:
         await process_commands(client, C.TELEGRAM_BOT_TOKEN, C.TELEGRAM_CHAT_ID, state)
@@ -102,7 +115,7 @@ async def main():
         for i in range(0, len(pools), BATCH_SIZE):
             batch = pools[i : i + BATCH_SIZE]
             results = await asyncio.gather(
-                *[process_pool(client, p, cache) for p in batch],
+                *[process_pool(client, p, cache, top10_cache) for p in batch],
                 return_exceptions=True,
             )
             for res in results:
@@ -134,6 +147,7 @@ async def main():
         )
 
     save_cache(cache)
+    save_top10_cache(top10_cache)
     print(f"Done. Scanned: {total_scanned}, Passed: {len(passed_results)}, Alerts sent: {alerts_sent}")
 
 

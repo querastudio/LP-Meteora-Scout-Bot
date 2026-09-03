@@ -23,6 +23,11 @@ ENABLE_MINT_FREEZE_CHECK = _env_bool("ENABLE_MINT_FREEZE_CHECK", True)  # 1x get
 ENABLE_TOP10_CHECK       = _env_bool("ENABLE_TOP10_CHECK", True)        # 2x RPC call/pool
 ENABLE_HOLDERS_CHECK     = _env_bool("ENABLE_HOLDERS_CHECK", True)      # s/d 10x RPC call/pool (paling boros)
 
+# Berapa lama nilai top10_pct per-token di-cache sebelum di-fetch ulang dari Birdeye.
+# Distribusi holder jarang berubah drastis dalam hitungan menit — cache ini yang bikin
+# kuota gratis Birdeye (30.000 CU/bulan, 35 CU/call) cukup dipakai walau scan tiap 5 menit.
+TOP10_CACHE_TTL_HOURS = float(os.environ.get("TOP10_CACHE_TTL_HOURS", 12.0))
+
 MIN_MCAP            = int(os.environ.get("MIN_MCAP", 100_000))
 MAX_MCAP            = int(os.environ.get("MAX_MCAP", 2_000_000))
 MIN_HOLDERS         = int(os.environ.get("MIN_HOLDERS", 1000))
