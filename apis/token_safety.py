@@ -183,7 +183,11 @@ async def _get_top10_amount_birdeye(client: httpx.AsyncClient, mint: str, birdey
         items = (body.get("data") or {}).get("items") or []
         if not items:
             return None
-        return sum(float(i.get("ui_amount") or i.get("uiAmount") or 0) for i in items)
+        # Live testing showed Birdeye's actual field is "amount" (already UI-scaled, e.g.
+        # 743409020.17 for a token with ~7.5B supply) — "ui_amount"/"uiAmount" don't appear
+        # in the real response despite being a reasonable guess from the docs. Check all
+        # three so this doesn't silently break again if Birdeye changes the field name.
+        return sum(float(i.get("amount") or i.get("ui_amount") or i.get("uiAmount") or 0) for i in items)
     except Exception:
         return None
 
