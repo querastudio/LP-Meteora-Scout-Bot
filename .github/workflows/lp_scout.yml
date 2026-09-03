@@ -14,6 +14,10 @@ on:
         description: "Test Alchemy/Helius RPC connectivity instead of scanning (prints result to log)"
         type: boolean
         default: false
+      inspect_fields:
+        description: "Dump raw Meteora /pools JSON to check for undocumented fields (prints to log)"
+        type: boolean
+        default: false
 
 jobs:
   scan:
@@ -55,8 +59,12 @@ jobs:
           BIRDEYE_API_KEY:    ${{ secrets.BIRDEYE_API_KEY }}
         run: python test_rpc.py
 
+      - name: Inspect raw pool fields (manual only)
+        if: github.event_name == 'workflow_dispatch' && inputs.inspect_fields == true
+        run: python inspect_pool_fields.py
+
       - name: Run bot
-        if: github.event_name != 'workflow_dispatch' || (inputs.send_test_alert != true && inputs.test_rpc != true)
+        if: github.event_name != 'workflow_dispatch' || (inputs.send_test_alert != true && inputs.test_rpc != true && inputs.inspect_fields != true)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
