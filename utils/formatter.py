@@ -1,4 +1,5 @@
 import datetime
+import html
 
 import config as C
 from screener import classify_net_deposit_signal
@@ -55,7 +56,7 @@ def _auth_str(val) -> str:
 def _layer3_tag_lines(m: dict, tags: dict) -> str:
     lines = []
     if tags.get("new_pool"):
-        lines.append(f"⚠️ Pool Baru — umur {m['pool_age_days']} hari (< {C.NEW_POOL_WARNING_DAYS} hari)")
+        lines.append(f"⚠️ Pool Baru — umur {m['pool_age_days']} hari (di bawah {C.NEW_POOL_WARNING_DAYS} hari)")
     momentum = tags.get("momentum")
     if momentum is not None:
         lines.append(f"🔥 Momentum naik — Vol 1h {momentum:.1f}x rata-rata per-jam 24h")
@@ -67,12 +68,16 @@ def _layer3_tag_lines(m: dict, tags: dict) -> str:
 
 def build_alert(result: dict) -> str:
     m, s, sibling, tags = result["metrics"], result["safety"], result.get("sibling"), result.get("tags") or {}
-    sym = s.get("symbol") or (m["name"].split("-")[0] if m.get("name") else "?")
+    # Token symbol/name is attacker-controlled on-chain metadata (anyone can mint a token
+    # with any name) — HTML-escape it so it can never break Telegram's HTML parser or
+    # inject markup into the alert.
+    raw_sym = s.get("symbol") or (m["name"].split("-")[0] if m.get("name") else "?")
+    sym = html.escape(raw_sym)
     now_wib = now_wib_str()
 
     meteora = f"https://app.meteora.ag/dlmm/{m['address']}"
     birdeye = f"https://birdeye.so/token/{m['mint_x']}"
-    dexscr = s.get("dex_url") or f"https://dexscreener.com/solana/{m['mint_x']}"
+    dexscr = html.escape(s.get("dex_url") or f"https://dexscreener.com/solana/{m['mint_x']}", quote=True)
 
     holders = s.get("holders")
     holders_str = f"{holders:,}" if holders is not None else "N/A"
@@ -134,7 +139,7 @@ def build_alert(result: dict) -> str:
 def build_summary(total, passed, fail_layer1, skipped_no_spike, skipped_cooldown, top3) -> str:
     now_wib = now_wib_str()
     top3_txt = "".join(
-        f"{i + 1}. {r['safety'].get('symbol', '?')} — Fee/TVL: {r['metrics']['fees_tvl_pct']:.1f}%/hari\n"
+        f"{i + 1}. {html.escape(r['safety'].get('symbol') or '?')} — Fee/TVL: {r['metrics']['fees_tvl_pct']:.1f}%/hari\n"
         for i, r in enumerate(top3)
     )
     return f"""📊 <b>LP SCOUT — RUN SUMMARY</b>
