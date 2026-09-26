@@ -18,6 +18,10 @@ on:
         description: "Dump raw Meteora /pools JSON to check for undocumented fields (prints to log)"
         type: boolean
         default: false
+      inspect_fields2:
+        description: "Dump DexScreener m5/h6/txns + Meteora /pools/groups (prints to log)"
+        type: boolean
+        default: false
 
 jobs:
   scan:
@@ -63,8 +67,12 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.inspect_fields == true
         run: python inspect_pool_fields.py
 
+      - name: Inspect DexScreener + pool groups (manual only)
+        if: github.event_name == 'workflow_dispatch' && inputs.inspect_fields2 == true
+        run: python inspect_pool_fields2.py
+
       - name: Run bot
-        if: github.event_name != 'workflow_dispatch' || (inputs.send_test_alert != true && inputs.test_rpc != true && inputs.inspect_fields != true)
+        if: github.event_name != 'workflow_dispatch' || (inputs.send_test_alert != true && inputs.test_rpc != true && inputs.inspect_fields != true && inputs.inspect_fields2 != true)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
