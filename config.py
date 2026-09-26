@@ -35,25 +35,44 @@ MAX_TOP10_PCT       = float(os.environ.get("MAX_TOP10_PCT", 30.0))
 MAX_DEV_HOLD_PCT    = float(os.environ.get("MAX_DEV_HOLD_PCT", 5.0))
 MIN_TOKEN_AGE_DAYS  = int(os.environ.get("MIN_TOKEN_AGE_DAYS", 0))
 
-MIN_FEES_TVL_PCT    = float(os.environ.get("MIN_FEES_TVL_PCT", 8.0))
-MIN_VOL_TVL_PCT     = float(os.environ.get("MIN_VOL_TVL_PCT", 200.0))
-MAX_VOL_TVL_PCT     = float(os.environ.get("MAX_VOL_TVL_PCT", 700.0))
-MIN_VOLATILITY      = float(os.environ.get("MIN_VOLATILITY", 2.0))
-MAX_VOLATILITY      = float(os.environ.get("MAX_VOLATILITY", 6.0))
-MIN_IN_RANGE_PCT    = float(os.environ.get("MIN_IN_RANGE_PCT", 40.0))
-MIN_POOL_AGE_DAYS   = int(os.environ.get("MIN_POOL_AGE_DAYS", 0))
-MAX_POOL_AGE_DAYS   = int(os.environ.get("MAX_POOL_AGE_DAYS", 20))
-MIN_ACTIVE_TVL      = float(os.environ.get("MIN_ACTIVE_TVL", 3000.0))
-MIN_AVG_FEES_MIN    = float(os.environ.get("MIN_AVG_FEES_MIN", 0.30))
-MIN_AVG_VOL_MIN     = float(os.environ.get("MIN_AVG_VOL_MIN", 20.0))
-MIN_TOTAL_LPS       = int(os.environ.get("MIN_TOTAL_LPS", 10))
+# --- Layer 1: hard filter per-pool (CEREBRO criteria) ------------------------------
+# Derived from the CEREBRO-USDG case study on the sibling Robinhood Chain (Uniswap) bot:
+# a genuinely profitable pool with TVL ~$100K, Vol/TVL ~7x/day, Fee/TVL ~14-15%/day,
+# base fee 2%, age 13 days. These are the minimums a Meteora DLMM pool must clear
+# individually before it's even considered as a sibling-selection candidate. A field
+# that's unavailable from every data source is SKIPPED for that pool, never treated as
+# a failure — see filter_pool_layer1() in screener.py.
+MIN_POOL_TVL        = float(os.environ.get("MIN_POOL_TVL", 10_000.0))
+MIN_VOL_TVL_RATIO   = float(os.environ.get("MIN_VOL_TVL_RATIO", 2.0))     # vol_24h / tvl, e.g. 2.0 = 2x/day
+MIN_FEE_TVL_PCT     = float(os.environ.get("MIN_FEE_TVL_PCT", 10.0))     # fees_24h / tvl, %/day
+MIN_BASE_FEE_PCT    = float(os.environ.get("MIN_BASE_FEE_PCT", 2.0))
 
-MIN_BIN_STEP        = int(os.environ.get("MIN_BIN_STEP", 80))
-MAX_BIN_STEP        = int(os.environ.get("MAX_BIN_STEP", 125))
-MIN_BASE_FEE_PCT    = float(os.environ.get("MIN_BASE_FEE_PCT", 1.0))  # no upper bound
-MAX_TOTAL_FEE_PCT   = float(os.environ.get("MAX_TOTAL_FEE_PCT", 3.0))
-MIN_FEES_24H        = float(os.environ.get("MIN_FEES_24H", 500.0))
-MIN_FEES_TVL_24H    = float(os.environ.get("MIN_FEES_TVL_24H", 8.0))
+# Pool age is explicitly NOT a hard filter (PRD: a pool <1 day old still gets alerted,
+# just with a "⚠️ Pool Baru" warning tag instead of being rejected) — see enrich_layer3_tags().
+NEW_POOL_WARNING_DAYS = int(os.environ.get("NEW_POOL_WARNING_DAYS", 1))
+
+# --- Layer 2: sibling-pool selection (per token pair, not per pool) -----------------
+# Meteora often has several pools for the same token pair at different bin_step values
+# (the DLMM equivalent of Uniswap fee tiers). A candidate whose volume is this lopsided
+# ("jomplang") vs. the busiest sibling is skipped from the priority list even if it
+# individually cleared Layer 1 — it's fragmented liquidity, not real depth. Mirrors the
+# CEREBRO 2.08%/$11K-vs-2.1%/$707.8K case from the Robinhood Chain bot.
+SIBLING_JOMPLANG_RATIO = float(os.environ.get("SIBLING_JOMPLANG_RATIO", 0.5))
+
+# --- Layer 3: informational tags (never reject a pool) ------------------------------
+MOMENTUM_RATIO_THRESHOLD = float(os.environ.get("MOMENTUM_RATIO_THRESHOLD", 1.5))  # vol_1h vs hourly-avg-of-24h
+
+# --- Final gate before sending: short-term (5-minute) volume spike ------------------
+# Kept deliberately loose: validation on the Robinhood Chain bot showed a $50K floor +
+# 3x multiplier was far too strict — a $100K-TVL pool like CEREBRO almost never clears
+# $50K inside a single 5-minute window even while genuinely "kencang".
+SPIKE_FLOOR_USD          = float(os.environ.get("SPIKE_FLOOR_USD", 7_500.0))
+SPIKE_MULTIPLIER         = float(os.environ.get("SPIKE_MULTIPLIER", 1.5))
+# Bypass: a pool already proven "kencang" over a full 24h (high Vol/TVL AND Fee/TVL)
+# skips the 5-minute check entirely, so it's never missed just because the specific
+# 5-minute window it got checked in happened to be quiet.
+SPIKE_BYPASS_VOL_TVL_RATIO = float(os.environ.get("SPIKE_BYPASS_VOL_TVL_RATIO", 5.0))   # 500%/day
+SPIKE_BYPASS_FEE_TVL_PCT   = float(os.environ.get("SPIKE_BYPASS_FEE_TVL_PCT", 10.0))    # %/day
 
 COOLDOWN_HOURS      = int(os.environ.get("COOLDOWN_HOURS", 6))
 MAX_ALERTS_RUN      = int(os.environ.get("MAX_ALERTS_RUN", 5))

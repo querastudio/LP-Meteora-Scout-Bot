@@ -36,16 +36,11 @@ def fake_result():
         "vol_24h": 682000.0,
         "fees_tvl_pct": 12.91,
         "vol_tvl_pct": 574.0,
+        "vol_tvl_ratio": 5.74,
         "base_fee_pct": 2.0,
         "bin_step": 100,
-        "pool_age_days": 2,
-        "in_range_pct": 50.0,
-        "open_positions": 245,
-        "in_range_pos": 122,
-        "volatility": 2.57,
-        "avg_fees_min": 10.65,
-        "avg_vol_min": 473.0,
-        "total_lps": 196,
+        "pool_age_days": 13,
+        "net_deposits": -22000.0,
         "current_price": 1.0,
     }
     safety = {
@@ -57,9 +52,28 @@ def fake_result():
         "freeze_auth": False,
         "token_age_days": 5,
         "dex_url": "",
+        "volume_h6": 195000.0,
+        "buys_24h": 4210,
+        "sells_24h": 3860,
     }
-    shape = {"shape": "Bell / Near-peak ✅", "position": "Harga dekat puncak ✅"}
-    return {"metrics": metrics, "safety": safety, "shape": shape}
+    sibling = {
+        "sibling_count": 3,
+        "volume_ratio": 1.0,
+        "beaten_siblings": 2,
+        "fallback_all_jomplang": False,
+    }
+    tags = {"momentum": 1.8, "new_pool": False, "fee_vs_drawdown": 2.3}
+    return {"metrics": metrics, "safety": safety, "sibling": sibling, "tags": tags}
+
+
+def fake_new_pool_result():
+    """A second preview case: a pool <1 day old — should show the ⚠️ Pool Baru tag and
+    still be alertable, never rejected, per the PRD's acceptance criteria."""
+    result = fake_result()
+    result["metrics"] = dict(result["metrics"], pool_age_days=0, address="NewPoo1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+    result["tags"] = {"momentum": None, "new_pool": True, "fee_vs_drawdown": None}
+    result["sibling"] = {"sibling_count": 1, "volume_ratio": 1.0, "beaten_siblings": 0, "fallback_all_jomplang": False}
+    return result
 
 
 async def main():
@@ -67,9 +81,12 @@ async def main():
         result = fake_result()
         await send_telegram(client, build_alert(result))
         await asyncio.sleep(1)
+        await send_telegram(client, build_alert(fake_new_pool_result()))
+        await asyncio.sleep(1)
         await send_telegram(
             client,
-            build_summary(120, 1, 45, 60, 14, [result]) + "\n\n(contoh notifikasi — data fiktif untuk preview format)",
+            build_summary(120, 2, 45, 8, 14, [result])
+            + "\n\n(contoh notifikasi — data fiktif untuk preview format)",
         )
     print("Test alert sent.")
 

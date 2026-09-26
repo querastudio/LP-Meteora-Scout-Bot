@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import asyncio
+import collections
 
 import httpx
 
@@ -7,7 +8,7 @@ import config as C
 from apis.meteora import get_all_pools, parse_pool_metrics
 from apis.telegram_commands import process_commands
 from apis.token_safety import get_token_safety
-from screener import run_all_filters
+from screener import check_token_safety, enrich_layer3_tags, is_proven_by_pool_quality, select_best_sibling
 from utils.cooldown import clean_old_entries, is_on_cooldown, load_cache, mark_sent, save_cache
 from utils.formatter import build_alert, build_summary
 from utils.state import load_state, save_state
@@ -34,24 +35,25 @@ async def send_telegram(client: httpx.AsyncClient, text: str):
         print(f"Telegram send failed: {e}")
 
 
-async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict, top10_cache: dict):
-    m = parse_pool_metrics(pool)
+def group_by_token_pair(pools_raw: list[dict]) -> dict[str, list[dict]]:
+    """Group parsed X/SOL pool metrics by the non-SOL mint — all sibling bin_step/fee-tier
+    pools of the same token pair land in the same bucket. No extra API call needed since
+    Meteora has no /pools/groups endpoint (confirmed 400/404 live) — this is done entirely
+    from the already-fetched /pools list."""
+    groups: dict[str, list[dict]] = collections.defaultdict(list)
+    for pool_raw in pools_raw:
+        m = parse_pool_metrics(pool_raw)
+        if m["mint_y"].lower() != C.SOL_MINT.lower():
+            continue
+        if not m["address"] or not m["mint_x"]:
+            continue
+        groups[m["mint_x"]].append(m)
+    return groups
 
-    if m["mint_y"].lower() != C.SOL_MINT.lower():
-        return None
-    if not m["address"] or not m["mint_x"]:
-        return None
-    if is_on_cooldown(m["address"], cache):
-        return None
 
-    # Cheap pre-filter before hitting token-safety / RPC APIs.
-    if m["fees_tvl_pct"] < C.MIN_FEES_TVL_PCT * 0.7:
-        return None
-    if m["tvl"] < C.MIN_ACTIVE_TVL * 0.5:
-        return None
-
-    # Holder concentration barely moves minute to minute — reuse a cached value instead of
-    # burning a Birdeye call (35 CU each) on every 5-minute scan for the same token.
+async def enrich_winner(client: httpx.AsyncClient, m: dict, top10_cache: dict) -> dict:
+    """Expensive per-token checks (Birdeye/RPC token safety + DexScreener) — run ONLY on
+    the per-pair Layer 2 winner, never on every candidate pool, to keep API usage bounded."""
     cached_top10 = get_cached_top10(top10_cache, m["mint_x"], C.TOP10_CACHE_TTL_HOURS)
     fetch_top10 = C.ENABLE_TOP10_CHECK and cached_top10 is None
 
@@ -83,10 +85,30 @@ async def process_pool(client: httpx.AsyncClient, pool: dict, cache: dict, top10
     safety["symbol"] = safety.get("symbol") or m["target_symbol"]
     safety["name"] = safety.get("name") or m["target_name"]
 
-    # No bin-level liquidity data is exposed by the new datapi /pools endpoint, so the
-    # "Liquidity Shape" bonus check is always skipped (classify_liquidity_shape no-ops on []).
-    result = run_all_filters(pool, safety, bins=[])
-    return result
+    return safety
+
+
+def passes_spike_gate(m: dict, dex: dict) -> tuple[bool, str]:
+    """Final gate before sending: short-term (5-minute, DexScreener's finest granularity)
+    volume must clear an absolute floor AND show a real spike vs. this token's own average
+    activity — unless the pool is already proven "kencang" over a full 24h, in which case
+    the gate is bypassed entirely (see config.py for why these thresholds are loose)."""
+    if is_proven_by_pool_quality(m):
+        return True, "bypass (proven 24h)"
+
+    vol_5m = dex.get("volume_m5")
+    if vol_5m is None:
+        return False, "no 5m data"
+    if vol_5m < C.SPIKE_FLOOR_USD:
+        return False, f"5m ${vol_5m:,.0f} < floor ${C.SPIKE_FLOOR_USD:,.0f}"
+
+    vol_h1 = dex.get("volume_h1")
+    if vol_h1 is not None:
+        baseline_5m = vol_h1 / 12  # h1 has 12 five-minute windows
+        if baseline_5m > 0 and vol_5m < C.SPIKE_MULTIPLIER * baseline_5m:
+            return False, f"5m ${vol_5m:,.0f} < {C.SPIKE_MULTIPLIER}x baseline ${baseline_5m:,.0f}"
+
+    return True, "ok"
 
 
 async def main():
@@ -103,38 +125,60 @@ async def main():
             return
 
         try:
-            pools = await get_all_pools(client, max_pages=C.MAX_POOL_PAGES)
+            pools_raw = await get_all_pools(client, max_pages=C.MAX_POOL_PAGES)
         except Exception as e:
             print(f"Failed to fetch pools: {e}")
             return
 
-        passed_results = []
-        total_scanned = 0
-        fail_safety = fail_pool = fail_fee = 0
+        groups = group_by_token_pair(pools_raw)
+        total_scanned = sum(len(v) for v in groups.values())
 
-        for i in range(0, len(pools), BATCH_SIZE):
-            batch = pools[i : i + BATCH_SIZE]
+        # Layer 1 (hard filter) + Layer 2 (sibling selection) run cheaply on already-fetched
+        # data, no API calls — only the per-pair winner goes on to expensive checks below.
+        winners = []
+        fail_layer1 = 0
+        skipped_cooldown = 0
+        for mint_x, siblings in groups.items():
+            winner, sibling_info = select_best_sibling(siblings)
+            if winner is None:
+                fail_layer1 += 1
+                continue
+            if is_on_cooldown(winner["address"], cache):
+                skipped_cooldown += 1
+                continue
+            winners.append((winner, sibling_info))
+
+        enriched = []
+        skipped_no_spike = 0
+        for i in range(0, len(winners), BATCH_SIZE):
+            batch = winners[i : i + BATCH_SIZE]
             results = await asyncio.gather(
-                *[process_pool(client, p, cache, top10_cache) for p in batch],
+                *[enrich_winner(client, m, top10_cache) for m, _ in batch],
                 return_exceptions=True,
             )
-            for res in results:
-                if not isinstance(res, dict):
+            for (m, sibling_info), safety in zip(batch, results):
+                if not isinstance(safety, dict):
                     continue
-                total_scanned += 1
-                if not res["l1_ok"]:
-                    fail_safety += 1
-                elif not res["l2_ok"]:
-                    fail_pool += 1
-                elif not res["l3_ok"]:
-                    fail_fee += 1
-                elif res["passed"]:
-                    passed_results.append(res)
+                safety_ok, safety_fails = check_token_safety(safety)
+                if not safety_ok:
+                    continue
+                dex = safety  # DexScreener fields (volume_m5/h1/h6, buys/sells, price_change) live on safety
+                spike_ok, spike_reason = passes_spike_gate(m, dex)
+                if not spike_ok:
+                    skipped_no_spike += 1
+                    continue
+                tags = enrich_layer3_tags(m, dex)
+                enriched.append({
+                    "metrics": m,
+                    "safety": safety,
+                    "sibling": sibling_info,
+                    "tags": tags,
+                })
 
-        passed_results.sort(key=lambda r: r["metrics"]["fees_tvl_pct"], reverse=True)
+        enriched.sort(key=lambda r: r["metrics"]["fees_tvl_pct"], reverse=True)
 
         alerts_sent = 0
-        for result in passed_results[: C.MAX_ALERTS_RUN]:
+        for result in enriched[: C.MAX_ALERTS_RUN]:
             addr = result["metrics"]["address"]
             await send_telegram(client, build_alert(result))
             mark_sent(addr, cache)
@@ -143,12 +187,15 @@ async def main():
 
         await send_telegram(
             client,
-            build_summary(total_scanned, len(passed_results), fail_safety, fail_pool, fail_fee, passed_results[:3]),
+            build_summary(total_scanned, len(enriched), fail_layer1, skipped_no_spike, skipped_cooldown, enriched[:3]),
         )
 
     save_cache(cache)
     save_top10_cache(top10_cache)
-    print(f"Done. Scanned: {total_scanned}, Passed: {len(passed_results)}, Alerts sent: {alerts_sent}")
+    print(
+        f"Done. Scanned: {total_scanned}, Token pairs: {len(groups)}, "
+        f"Winners passed: {len(enriched)}, Alerts sent: {alerts_sent}"
+    )
 
 
 if __name__ == "__main__":

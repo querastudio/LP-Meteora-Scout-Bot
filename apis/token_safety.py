@@ -139,6 +139,9 @@ async def get_dexscreener_data(client: httpx.AsyncClient, mint: str) -> dict:
         if created_at:
             dt = datetime.datetime.fromtimestamp(created_at / 1000, tz=datetime.timezone.utc)
             age_days = (datetime.datetime.now(datetime.timezone.utc) - dt).days
+        volume = best.get("volume") or {}
+        txns_24h = (best.get("txns") or {}).get("h24") or {}
+        price_change = best.get("priceChange") or {}
         return {
             "mcap": float(best.get("marketCap") or 0),
             "fdv": float(best.get("fdv") or 0),
@@ -146,7 +149,18 @@ async def get_dexscreener_data(client: httpx.AsyncClient, mint: str) -> dict:
             "symbol": (best.get("baseToken") or {}).get("symbol", ""),
             "name": (best.get("baseToken") or {}).get("name", ""),
             "dex_url": best.get("url", ""),
-            "volume_24h": float((best.get("volume") or {}).get("h24") or 0),
+            "volume_24h": float(volume.get("h24") or 0),
+            # Confirmed live (2026-09-26) that DexScreener exposes finer volume windows and
+            # trade counts Meteora's own API doesn't — used for the short-term spike gate,
+            # the momentum tag, Volume 6h display, and Trades 24h display. Left as None
+            # (not 0) when DexScreener has no pairs for this mint, so callers skip these
+            # checks gracefully instead of treating "no data" as "no volume".
+            "volume_m5": volume.get("m5"),
+            "volume_h1": volume.get("h1"),
+            "volume_h6": volume.get("h6"),
+            "buys_24h": txns_24h.get("buys"),
+            "sells_24h": txns_24h.get("sells"),
+            "price_change_24h": price_change.get("h24"),
         }
     except Exception:
         return {}
@@ -280,5 +294,11 @@ async def get_token_safety(
         "mint_auth": auth.get("mint_auth"),
         "freeze_auth": auth.get("freeze_auth"),
         "volume_24h": dex.get("volume_24h", 0),
+        "volume_m5": dex.get("volume_m5"),
+        "volume_h1": dex.get("volume_h1"),
+        "volume_h6": dex.get("volume_h6"),
+        "buys_24h": dex.get("buys_24h"),
+        "sells_24h": dex.get("sells_24h"),
+        "price_change_24h": dex.get("price_change_24h"),
         "dex_url": dex.get("dex_url", ""),
     }

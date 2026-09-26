@@ -31,6 +31,10 @@ def fmt_usd_signed(v) -> str:
     return f"{sign}{fmt_usd(abs(v))}"
 
 
+def fmt_usd_or_na(v) -> str:
+    return "N/A" if v is None else fmt_usd(v)
+
+
 def sig(v, lo, hi=None, rev=False) -> str:
     if v is None:
         return "⚪"
@@ -48,8 +52,21 @@ def _auth_str(val) -> str:
     return "✅ Disabled" if not val else "❌ AKTIF"
 
 
+def _layer3_tag_lines(m: dict, tags: dict) -> str:
+    lines = []
+    if tags.get("new_pool"):
+        lines.append(f"⚠️ Pool Baru — umur {m['pool_age_days']} hari (< {C.NEW_POOL_WARNING_DAYS} hari)")
+    momentum = tags.get("momentum")
+    if momentum is not None:
+        lines.append(f"🔥 Momentum naik — Vol 1h {momentum:.1f}x rata-rata per-jam 24h")
+    fee_vs_drawdown = tags.get("fee_vs_drawdown")
+    if fee_vs_drawdown is not None:
+        lines.append(f"💡 Fee vs Drawdown — Fee/TVL {fee_vs_drawdown:.1f}x drawdown 24h")
+    return "\n".join(lines)
+
+
 def build_alert(result: dict) -> str:
-    m, s, sh = result["metrics"], result["safety"], result["shape"]
+    m, s, sibling, tags = result["metrics"], result["safety"], result.get("sibling"), result.get("tags") or {}
     sym = s.get("symbol") or (m["name"].split("-")[0] if m.get("name") else "?")
     now_wib = now_wib_str()
 
@@ -67,7 +84,25 @@ def build_alert(result: dict) -> str:
         _, nd_label = classify_net_deposit_signal(m["net_deposits"], m["fees_tvl_pct"], m["vol_tvl_pct"])
         net_deposits_line = f"📊 Net Deposits    : {fmt_usd_signed(m['net_deposits'])} {nd_label}\n"
 
-    return f"""🟢 <b>POOL ALERT — {sym}/SOL</b>
+    sibling_line = ""
+    if sibling:
+        if sibling["sibling_count"] > 1:
+            sibling_line = (
+                f"🏆 Sibling Win     : menang atas {sibling['beaten_siblings']} pool lain "
+                f"(vol ratio {sibling['volume_ratio']:.0%}"
+                f"{', fallback volume' if sibling['fallback_all_jomplang'] else ''})\n"
+            )
+        else:
+            sibling_line = "🏆 Sibling Win     : satu-satunya pool untuk pair ini\n"
+
+    buys, sells = s.get("buys_24h"), s.get("sells_24h")
+    trades_str = f"{buys:,} beli / {sells:,} jual" if buys is not None and sells is not None else "N/A"
+
+    tag_lines = _layer3_tag_lines(m, tags)
+    tag_section = f"\n{tag_lines}\n━━━━━━━━━━━━━━━━━━━━━" if tag_lines else ""
+    new_pool_prefix = "⚠️ " if tags.get("new_pool") else ""
+
+    return f"""🟢 <b>{new_pool_prefix}POOL ALERT — {sym}/SOL</b>
 ━━━━━━━━━━━━━━━━━━━━━
 🔐 <b>TOKEN SAFETY</b>
 ━━━━━━━━━━━━━━━━━━━━━
@@ -77,49 +112,37 @@ def build_alert(result: dict) -> str:
 📊 Top 10 %    : {top10_str} {sig(top10_pct, 0, C.MAX_TOP10_PCT)}
 🔒 Mint Auth   : {_auth_str(s.get('mint_auth'))}
 ❄️ Freeze Auth  : {_auth_str(s.get('freeze_auth'))}
-📅 Token Age   : {s.get('token_age_days', 0)} hari {sig(s.get('token_age_days', 0), C.MIN_TOKEN_AGE_DAYS)}
 ━━━━━━━━━━━━━━━━━━━━━
-📈 <b>POOL METRICS</b>
+📈 <b>POOL METRICS (CEREBRO)</b>
 ━━━━━━━━━━━━━━━━━━━━━
-🏊 Pool Age        : {m['pool_age_days']} hari {sig(m['pool_age_days'], C.MIN_POOL_AGE_DAYS, C.MAX_POOL_AGE_DAYS)}
-💧 Active TVL      : {fmt_usd(m['tvl'])} {sig(m['tvl'], C.MIN_ACTIVE_TVL)}
-💸 Fees/Active TVL : {m['fees_tvl_pct']:.1f}% {sig(m['fees_tvl_pct'], C.MIN_FEES_TVL_PCT)}
-🔄 Vol/Active TVL  : {m['vol_tvl_pct']:.0f}% {sig(m['vol_tvl_pct'], C.MIN_VOL_TVL_PCT, C.MAX_VOL_TVL_PCT)}
-{net_deposits_line}📉 Volatility      : {fmt_num_or_na(m['volatility'])} {sig(m['volatility'], C.MIN_VOLATILITY, C.MAX_VOLATILITY)}
-🎯 In Range %      : {fmt_num_or_na(m['in_range_pct'], "{:.0f}%")} {sig(m['in_range_pct'], C.MIN_IN_RANGE_PCT)}
-⚡ Avg Fees/Min    : {fmt_usd(m['avg_fees_min'])} {sig(m['avg_fees_min'], C.MIN_AVG_FEES_MIN)}
-📊 Avg Vol/Min     : {fmt_usd(m['avg_vol_min'])} {sig(m['avg_vol_min'], C.MIN_AVG_VOL_MIN)}
-👨‍💼 Total LPs       : {m['total_lps'] if m['total_lps'] is not None else "N/A"}
-━━━━━━━━━━━━━━━━━━━━━
-⚙️ <b>FEE STRUCTURE</b>
-━━━━━━━━━━━━━━━━━━━━━
-🪜 Bin Step        : {m['bin_step']} {sig(m['bin_step'], C.MIN_BIN_STEP, C.MAX_BIN_STEP)}
-📋 Base Fee        : {m['base_fee_pct']:.2f}% {sig(m['base_fee_pct'], C.MIN_BASE_FEE_PCT)}
-💰 24h Fees        : {fmt_usd(m['fees_24h'])} {sig(m['fees_24h'], C.MIN_FEES_24H)}
-📊 24h Fees/TVL    : {m['fees_tvl_pct']:.1f}% {sig(m['fees_tvl_pct'], C.MIN_FEES_TVL_24H)}
-━━━━━━━━━━━━━━━━━━━━━
-📊 <b>LIQUIDITY SHAPE</b>
-━━━━━━━━━━━━━━━━━━━━━
-🗺️ Distribution    : {sh['shape']}
-📍 Price vs Liq    : {sh['position']}
+🏊 Pool Age        : {fmt_num_or_na(m['pool_age_days'], "{:.0f} hari")}
+💧 TVL             : {fmt_usd(m['tvl'])} {sig(m['tvl'], C.MIN_POOL_TVL)}
+🔄 Vol/TVL         : {m['vol_tvl_ratio']:.2f}x {sig(m['vol_tvl_ratio'], C.MIN_VOL_TVL_RATIO)}
+💸 Fee/TVL         : {m['fees_tvl_pct']:.1f}%/hari {sig(m['fees_tvl_pct'], C.MIN_FEE_TVL_PCT)}
+📋 Base Fee/Bin    : {fmt_num_or_na(m['base_fee_pct'])} / bin_step {m['bin_step']} {sig(m['base_fee_pct'], C.MIN_BASE_FEE_PCT)}
+{net_deposits_line}{sibling_line}📊 Volume 24h      : {fmt_usd(m['vol_24h'])}
+📊 Volume 6h       : {fmt_usd_or_na(s.get('volume_h6'))}
+🔁 Trades 24h      : {trades_str}
 ━━━━━━━━━━━━━━━━━━━━━
 🔗 <b>LINKS</b>
 ━━━━━━━━━━━━━━━━━━━━━
-📌 <a href="{meteora}">Meteora</a>  |  <a href="{birdeye}">Birdeye</a>  |  <a href="{dexscr}">DexScreener</a>
+📌 <a href="{meteora}">Meteora</a>  |  <a href="{birdeye}">Birdeye</a>  |  <a href="{dexscr}">DexScreener</a>{tag_section}
 ⏰ {now_wib} WIB
 ⚠️ DYOR — bukan financial advice"""
 
 
-def build_summary(total, passed, fs, fp, ff, top3) -> str:
+def build_summary(total, passed, fail_layer1, skipped_no_spike, skipped_cooldown, top3) -> str:
     now_wib = now_wib_str()
     top3_txt = "".join(
-        f"{i + 1}. {r['safety'].get('symbol', '?')} — Fees/TVL: {r['metrics']['fees_tvl_pct']:.1f}%\n"
+        f"{i + 1}. {r['safety'].get('symbol', '?')} — Fee/TVL: {r['metrics']['fees_tvl_pct']:.1f}%/hari\n"
         for i, r in enumerate(top3)
     )
     return f"""📊 <b>LP SCOUT — RUN SUMMARY</b>
 {now_wib} WIB
-🔍 Di-scan   : {total}
-✅ Lolos     : {passed}
-❌ Safety    : {fs} | Pool: {fp} | Fee: {ff}
+🔍 Di-scan          : {total} pool
+✅ Lolos (alert)    : {passed}
+❌ Gagal Layer 1/2  : {fail_layer1} pasangan token
+⏭️ Skip spike gate  : {skipped_no_spike}
+🕒 Skip cooldown    : {skipped_cooldown}
 🏆 <b>Top Pool:</b>
 {top3_txt or "Tidak ada yang lolos."}📡 Running via GitHub Actions ✅"""

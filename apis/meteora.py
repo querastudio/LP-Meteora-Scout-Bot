@@ -36,9 +36,9 @@ async def get_pool_detail(client: httpx.AsyncClient, pool_address: str) -> Optio
         return None
 
 
-def _parse_created_at(created_raw) -> int:
+def _parse_created_at(created_raw) -> Optional[int]:
     if not created_raw:
-        return 0
+        return None
     try:
         ts = float(created_raw)
         if ts > 10_000_000_000:  # looks like milliseconds
@@ -46,14 +46,15 @@ def _parse_created_at(created_raw) -> int:
         dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
         return (datetime.datetime.now(datetime.timezone.utc) - dt).days
     except Exception:
-        return 0
+        return None
 
 
 def parse_pool_metrics(pool: dict) -> dict:
     """Map a PoolResponse (new datapi schema) into the flat metrics dict the rest of the
-    bot expects. Some fields the old /pair/all response used to expose (in-range %,
-    total LPs, volatility) no longer exist in this API and are set to None — callers must
-    treat None as "unknown, skip this check" rather than a failure.
+    bot expects. Meteora's own API has no in-range %, total-LPs, volatility, or bin-level
+    active-liquidity data at all (confirmed live, both /pools and /pools/{address}) — see
+    README's Phase 2 backlog. base_fee_pct and pool_age_days are None (not 0) when their
+    source field is genuinely missing, so filter_pool_layer1() can skip rather than fail.
     """
     token_x = pool.get("token_x") or {}
     token_y = pool.get("token_y") or {}
@@ -79,13 +80,11 @@ def parse_pool_metrics(pool: dict) -> dict:
                           else (fees_24h / tvl * 100 if tvl > 0 else 0))
     vol_tvl_pct = (vol_24h / tvl * 100) if tvl > 0 else 0
 
-    fees_30m = fees.get("30m")
-    vol_30m = volume.get("30m")
-    avg_fees_min = float(fees_30m) / 30 if fees_30m is not None else (fees_24h / 1440 if fees_24h else 0)
-    avg_vol_min = float(vol_30m) / 30 if vol_30m is not None else (vol_24h / 1440 if vol_24h else 0)
-
     bin_step = int(pool_config.get("bin_step") or 0)
-    base_fee_pct = float(pool_config.get("base_fee_pct") or 0)
+    # None (not 0) when pool_config itself is missing base_fee_pct entirely, so
+    # filter_pool_layer1() can skip the base-fee check instead of failing the pool.
+    raw_base_fee = pool_config.get("base_fee_pct")
+    base_fee_pct = float(raw_base_fee) if raw_base_fee is not None else None
 
     # net_deposits = total_deposit_usd - total_withdrawal_usd. Not present in the current
     # PoolResponse schema (see apis/meteora.py module docstring re: the datapi migration) —
@@ -109,18 +108,10 @@ def parse_pool_metrics(pool: dict) -> dict:
         "vol_24h": vol_24h,
         "fees_tvl_pct": fees_tvl_pct,
         "vol_tvl_pct": vol_tvl_pct,
+        "vol_tvl_ratio": vol_tvl_pct / 100,  # e.g. 2.0 = 2x/day, same units the PRD tables use
         "base_fee_pct": base_fee_pct,
         "bin_step": bin_step,
         "pool_age_days": _parse_created_at(pool.get("created_at")),
-        # Not exposed by the new datapi /pools endpoint (no per-position or LP-count data).
-        # None means "unknown" -> screener skips these checks instead of failing the pool.
-        "in_range_pct": None,
-        "open_positions": None,
-        "in_range_pos": None,
-        "volatility": None,
-        "avg_fees_min": avg_fees_min,
-        "avg_vol_min": avg_vol_min,
-        "total_lps": None,
         "net_deposits": net_deposits,
         "current_price": float(pool.get("current_price") or 0),
         # Token metrics the new API already gives us for free (per-token, on the pool object).
@@ -130,36 +121,3 @@ def parse_pool_metrics(pool: dict) -> dict:
         "target_freeze_disabled": target_token.get("freeze_authority_disabled"),
         "target_mcap": target_token.get("market_cap"),
     }
-
-
-def classify_liquidity_shape(bins: list[dict], current_bin_id: int) -> dict:
-    """Bin-level liquidity distribution. The new datapi has no bin_arrays endpoint, so this
-    is only ever called with an empty list today and safely no-ops (kept for when/if a bin
-    data source is wired back in)."""
-    if not bins:
-        return {"shape": "N/A", "position": "N/A", "dominant": "N/A", "ok": True}
-
-    bins_sorted = sorted(bins, key=lambda b: float(b.get("liquidity", 0)), reverse=True)
-    total_liq = sum(float(b.get("liquidity", 0)) for b in bins)
-    if total_liq == 0:
-        return {"shape": "Empty", "position": "N/A", "dominant": "N/A", "ok": True}
-
-    bin_ids = [b["bin_id"] for b in bins]
-    peak_bin = bins_sorted[0]["bin_id"]
-    spread = max(bin_ids) - min(bin_ids) if len(bin_ids) > 1 else 1
-    distance = abs(peak_bin - current_bin_id)
-    ratio = distance / spread if spread > 0 else 0
-
-    if ratio < 0.10:
-        shape, pos = "Concentrated ✅", "Di zona likuiditas tertinggi ✅"
-    elif ratio < 0.30:
-        shape, pos = "Bell / Near-peak ✅", "Dekat puncak likuiditas ✅"
-    elif ratio < 0.50:
-        shape, pos = "Spread lebar 🟡", "Agak jauh dari puncak 🟡"
-    else:
-        shape, pos = "Far from price ❌", "Mayoritas likuiditas jauh ❌"
-
-    dominant = "Balanced ✅" if current_bin_id == peak_bin else (
-        "Token-heavy" if current_bin_id < peak_bin else "SOL-heavy"
-    )
-    return {"shape": shape, "position": pos, "dominant": dominant, "ok": ratio < 0.50}
