@@ -79,6 +79,10 @@ def parse_pool_metrics(pool: dict) -> dict:
     fees_tvl_pct = float(fee_tvl_ratio.get("24h") if fee_tvl_ratio.get("24h") is not None
                           else (fees_24h / tvl * 100 if tvl > 0 else 0))
     vol_tvl_pct = (vol_24h / tvl * 100) if tvl > 0 else 0
+    # Meteora's fee_tvl_ratio values are already percent (e.g. 0.48 = 0.48% of TVL). None
+    # when the 1h window is missing so the filter can tell "unknown" from "zero".
+    fee_tvl_1h = fee_tvl_ratio.get("1h")
+    fees_tvl_1h_pct = float(fee_tvl_1h) if fee_tvl_1h is not None else None
 
     bin_step = int(pool_config.get("bin_step") or 0)
     # None (not 0) when pool_config itself is missing base_fee_pct entirely, so
@@ -108,6 +112,7 @@ def parse_pool_metrics(pool: dict) -> dict:
         "vol_24h": vol_24h,
         "fees_tvl_pct": fees_tvl_pct,
         "vol_tvl_pct": vol_tvl_pct,
+        "fees_tvl_1h_pct": fees_tvl_1h_pct,
         "vol_tvl_ratio": vol_tvl_pct / 100,  # e.g. 2.0 = 2x/day, same units the PRD tables use
         "base_fee_pct": base_fee_pct,
         "bin_step": bin_step,

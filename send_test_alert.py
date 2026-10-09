@@ -37,6 +37,7 @@ def fake_result():
         "fees_tvl_pct": 12.91,
         "vol_tvl_pct": 574.0,
         "vol_tvl_ratio": 5.74,
+        "fees_tvl_1h_pct": 0.9,
         "base_fee_pct": 2.0,
         "bin_step": 100,
         "pool_age_days": 13,
@@ -53,6 +54,10 @@ def fake_result():
         "token_age_days": 5,
         "dex_url": "",
         "volume_h6": 195000.0,
+        "trades_1h": 142,
+        "price_change_1h": 4.2,
+        "price_change_5m": 0.3,
+        "pullback_24h_pct": 8.5,
         "buys_24h": 4210,
         "sells_24h": 3860,
     }
@@ -85,7 +90,7 @@ async def main():
         await asyncio.sleep(1)
         await send_telegram(
             client,
-            build_summary(120, 2, 45, 8, 14, [result])
+            build_summary(120, 2, 45, 8, 3, 14, [result])
             + "\n\n(contoh notifikasi — data fiktif untuk preview format)",
         )
     print("Test alert sent.")

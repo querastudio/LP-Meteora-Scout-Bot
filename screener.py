@@ -23,32 +23,45 @@ def check_token_safety(s: dict) -> tuple[bool, list[str]]:
 
 
 def filter_pool_layer1(m: dict) -> tuple[bool, list[str]]:
-    """CEREBRO Layer 1 — hard filter applied to every individual pool.
-
-    A field that's unavailable from any data source (None) is SKIPPED, never treated as
-    a failure — missing data isn't bad data. Pool age is deliberately NOT checked here;
-    it's informational-only (see enrich_layer3_tags()), per the PRD.
-    """
+    """Stage A: pool metrics already present in the Meteora /pools response (no extra API
+    call). A 1h fee/TVL that Meteora doesn't report is treated as unverified and fails."""
     fails = []
     if m["tvl"] < C.MIN_POOL_TVL:
         fails.append(f"❌ TVL ${m['tvl']:,.0f} < ${C.MIN_POOL_TVL:,.0f}")
-    if m["vol_tvl_ratio"] < C.MIN_VOL_TVL_RATIO:
-        fails.append(f"❌ Vol/TVL {m['vol_tvl_ratio']:.2f}x < {C.MIN_VOL_TVL_RATIO}x")
+    if m["vol_24h"] < C.MIN_VOLUME_24H_USD:
+        fails.append(f"❌ Volume 24h ${m['vol_24h']:,.0f} < ${C.MIN_VOLUME_24H_USD:,.0f}")
+    fee_1h = m.get("fees_tvl_1h_pct")
+    if fee_1h is None or fee_1h < C.MIN_FEE_TVL_1H_PCT:
+        fails.append(f"❌ Fee/TVL 1h {fee_1h if fee_1h is not None else 'N/A'} < {C.MIN_FEE_TVL_1H_PCT}%")
     if m["fees_tvl_pct"] < C.MIN_FEE_TVL_PCT:
-        fails.append(f"❌ Fee/TVL {m['fees_tvl_pct']:.1f}%/hari < {C.MIN_FEE_TVL_PCT}%/hari")
-    if m["base_fee_pct"] is not None and m["base_fee_pct"] < C.MIN_BASE_FEE_PCT:
-        fails.append(f"❌ Base Fee {m['base_fee_pct']:.2f}% < {C.MIN_BASE_FEE_PCT}%")
+        fails.append(f"❌ Fee/TVL 24h {m['fees_tvl_pct']:.1f}% < {C.MIN_FEE_TVL_PCT}%")
     return len(fails) == 0, fails
 
 
-def is_proven_by_pool_quality(m: dict) -> bool:
-    """A pool already proven "kencang" over a full 24h — used to bypass the short-term
-    (5-minute) spike gate so a genuinely sustained pool isn't missed just because the
-    specific window it got checked in happened to be quiet."""
-    return (
-        m["vol_tvl_ratio"] >= C.SPIKE_BYPASS_VOL_TVL_RATIO
-        and m["fees_tvl_pct"] >= C.SPIKE_BYPASS_FEE_TVL_PCT
-    )
+def filter_pool_live(live: dict) -> tuple[bool, list[str]]:
+    """Stage B: live GeckoTerminal metrics. Strict — a metric that couldn't be fetched
+    fails, so an alert only fires when every criterion was actually verified."""
+    fails = []
+
+    def need(key, label):
+        v = live.get(key)
+        if v is None:
+            fails.append(f"❌ {label} tidak tersedia")
+        return v
+
+    trades = need("trades_1h", "Trades 1h")
+    if trades is not None and trades < C.MIN_TRADES_1H:
+        fails.append(f"❌ Trades 1h {trades} < {C.MIN_TRADES_1H}")
+    pc1h = need("price_change_1h", "Price change 1h")
+    if pc1h is not None and not (C.MIN_PRICE_CHANGE_1H_PCT <= pc1h <= C.MAX_PRICE_CHANGE_1H_PCT):
+        fails.append(f"❌ Price change 1h {pc1h:.1f}% di luar [{C.MIN_PRICE_CHANGE_1H_PCT}%, {C.MAX_PRICE_CHANGE_1H_PCT}%]")
+    pullback = need("pullback_24h_pct", "Pullback 24h")
+    if pullback is not None and pullback > C.MAX_PULLBACK_24H_PCT:
+        fails.append(f"❌ Pullback 24h {pullback:.1f}% > {C.MAX_PULLBACK_24H_PCT}%")
+    pc5m = need("price_change_5m", "Price change 5m")
+    if pc5m is not None and pc5m < C.MIN_PRICE_CHANGE_5M_PCT:
+        fails.append(f"❌ Price change 5m {pc5m:.1f}% < {C.MIN_PRICE_CHANGE_5M_PCT}%")
+    return len(fails) == 0, fails
 
 
 def select_best_sibling(pools: list[dict]) -> tuple[dict | None, dict | None]:

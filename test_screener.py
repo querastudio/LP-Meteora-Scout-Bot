@@ -8,7 +8,7 @@ import config as C
 from screener import (
     enrich_layer3_tags,
     filter_pool_layer1,
-    is_proven_by_pool_quality,
+    filter_pool_live,
     select_best_sibling,
 )
 
@@ -26,6 +26,7 @@ def make_pool(**overrides) -> dict:
         "fees_tvl_pct": 14.0,
         "vol_tvl_pct": 700.0,
         "vol_tvl_ratio": 7.0,
+        "fees_tvl_1h_pct": 0.8,
         "base_fee_pct": 2.0,
         "bin_step": 100,
         "pool_age_days": 13,
@@ -45,25 +46,49 @@ class TestFilterPoolLayer1(unittest.TestCase):
         ok, _ = filter_pool_layer1(make_pool(tvl=5_000.0))
         self.assertFalse(ok)
 
-    def test_fails_on_low_vol_tvl_ratio(self):
-        ok, _ = filter_pool_layer1(make_pool(vol_tvl_ratio=1.0))
+    def test_fails_on_low_volume_24h(self):
+        ok, _ = filter_pool_layer1(make_pool(vol_24h=50_000.0))
+        self.assertFalse(ok)
+
+    def test_fails_on_low_fee_tvl_1h(self):
+        ok, _ = filter_pool_layer1(make_pool(fees_tvl_1h_pct=0.1))
+        self.assertFalse(ok)
+
+    def test_unknown_fee_tvl_1h_fails(self):
+        ok, _ = filter_pool_layer1(make_pool(fees_tvl_1h_pct=None))
         self.assertFalse(ok)
 
     def test_fails_on_low_fee_tvl_pct(self):
         ok, _ = filter_pool_layer1(make_pool(fees_tvl_pct=3.0))
         self.assertFalse(ok)
 
-    def test_missing_base_fee_is_skipped_not_failed(self):
-        # None (unavailable from any source) must never fail the pool — only a known
-        # value below threshold does.
-        ok, fails = filter_pool_layer1(make_pool(base_fee_pct=None))
-        self.assertTrue(ok, fails)
-
     def test_pool_age_is_never_a_hard_filter(self):
         # A brand-new pool (age 0) must still pass Layer 1 — age is informational only
         # (see enrich_layer3_tags' "new_pool" tag), never a rejection reason.
         ok, fails = filter_pool_layer1(make_pool(pool_age_days=0))
         self.assertTrue(ok, fails)
+
+
+class TestFilterPoolLive(unittest.TestCase):
+    GOOD = {"trades_1h": 50, "price_change_1h": 5.0, "pullback_24h_pct": 10.0, "price_change_5m": 0.5}
+
+    def test_passes_when_all_clear(self):
+        self.assertTrue(filter_pool_live(dict(self.GOOD))[0])
+
+    def test_each_metric_can_fail(self):
+        for key, bad in [("trades_1h", 5), ("price_change_1h", -35.0), ("price_change_1h", 60.0),
+                         ("pullback_24h_pct", 40.0), ("price_change_5m", -5.0)]:
+            with self.subTest(key=key, bad=bad):
+                self.assertFalse(filter_pool_live({**self.GOOD, key: bad})[0])
+
+    def test_unknown_metric_fails_strict(self):
+        for key in self.GOOD:
+            with self.subTest(key=key):
+                self.assertFalse(filter_pool_live({**self.GOOD, key: None})[0])
+
+    def test_boundaries_inclusive(self):
+        edge = {"trades_1h": 10, "price_change_1h": -30.0, "pullback_24h_pct": 30.0, "price_change_5m": -3.0}
+        self.assertTrue(filter_pool_live(edge)[0])
 
 
 class TestSelectBestSibling(unittest.TestCase):
@@ -111,9 +136,9 @@ class TestSelectBestSibling(unittest.TestCase):
         # since it IS the max) — the fallback path is exercised with 3+ siblings where
         # the winner-by-fee is itself far below the busiest, unrelated pool that failed
         # Layer 1 (and so isn't a selectable candidate), leaving only lopsided passers.
-        candidate_a = make_pool(address="a", base_fee_pct=2.0, vol_24h=60_000.0, tvl=15_000.0,
+        candidate_a = make_pool(address="a", base_fee_pct=2.0, vol_24h=150_000.0, tvl=15_000.0,
                                  fees_24h=2_100.0, fees_tvl_pct=14.0, vol_tvl_pct=400.0, vol_tvl_ratio=4.0)
-        candidate_b = make_pool(address="b", base_fee_pct=1.0, vol_24h=45_000.0, tvl=15_000.0,
+        candidate_b = make_pool(address="b", base_fee_pct=1.0, vol_24h=120_000.0, tvl=15_000.0,
                                  fees_24h=2_100.0, fees_tvl_pct=14.0, vol_tvl_pct=300.0, vol_tvl_ratio=3.0)
         huge_failer = make_pool(address="huge-failer", vol_24h=1_000_000.0, fees_tvl_pct=1.0,
                                  vol_tvl_ratio=10.0, tvl=100_000.0, fees_24h=1_000.0)
@@ -131,14 +156,6 @@ class TestSelectBestSibling(unittest.TestCase):
         winner, info = select_best_sibling([])
         self.assertIsNone(winner)
         self.assertIsNone(info)
-
-
-class TestIsProvenByPoolQuality(unittest.TestCase):
-    def test_proven_when_both_thresholds_cleared(self):
-        self.assertTrue(is_proven_by_pool_quality(make_pool(vol_tvl_ratio=7.0, fees_tvl_pct=14.0)))
-
-    def test_not_proven_when_vol_tvl_below_bypass_threshold(self):
-        self.assertFalse(is_proven_by_pool_quality(make_pool(vol_tvl_ratio=2.0, fees_tvl_pct=14.0)))
 
 
 class TestEnrichLayer3Tags(unittest.TestCase):

@@ -8,7 +8,8 @@ import config as C
 from apis.meteora import get_all_pools, parse_pool_metrics
 from apis.telegram_commands import process_commands
 from apis.token_safety import get_token_safety
-from screener import check_token_safety, enrich_layer3_tags, is_proven_by_pool_quality, select_best_sibling
+from apis.geckoterminal_pool import get_live_stats
+from screener import check_token_safety, enrich_layer3_tags, filter_pool_live, select_best_sibling
 from utils.cooldown import clean_old_entries, is_on_cooldown, load_cache, mark_sent, save_cache
 from utils.formatter import build_alert, build_summary
 from utils.state import load_state, save_state
@@ -88,27 +89,11 @@ async def enrich_winner(client: httpx.AsyncClient, m: dict, top10_cache: dict) -
     return safety
 
 
-def passes_spike_gate(m: dict, dex: dict) -> tuple[bool, str]:
-    """Final gate before sending: short-term (5-minute, DexScreener's finest granularity)
-    volume must clear an absolute floor AND show a real spike vs. this token's own average
-    activity — unless the pool is already proven "kencang" over a full 24h, in which case
-    the gate is bypassed entirely (see config.py for why these thresholds are loose)."""
-    if is_proven_by_pool_quality(m):
-        return True, "bypass (proven 24h)"
-
-    vol_5m = dex.get("volume_m5")
-    if vol_5m is None:
-        return False, "no 5m data"
-    if vol_5m < C.SPIKE_FLOOR_USD:
-        return False, f"5m ${vol_5m:,.0f} < floor ${C.SPIKE_FLOOR_USD:,.0f}"
-
-    vol_h1 = dex.get("volume_h1")
-    if vol_h1 is not None:
-        baseline_5m = vol_h1 / 12  # h1 has 12 five-minute windows
-        if baseline_5m > 0 and vol_5m < C.SPIKE_MULTIPLIER * baseline_5m:
-            return False, f"5m ${vol_5m:,.0f} < {C.SPIKE_MULTIPLIER}x baseline ${baseline_5m:,.0f}"
-
-    return True, "ok"
+async def fetch_live_stats(client: httpx.AsyncClient, m: dict, sem: asyncio.Semaphore) -> dict:
+    async with sem:  # GeckoTerminal's free tier is ~30 req/min; keep calls gentle
+        stats = await get_live_stats(client, m["address"], m["mint_x"])
+        await asyncio.sleep(1.0)
+        return stats
 
 
 async def main():
@@ -148,31 +133,50 @@ async def main():
                 continue
             winners.append((winner, sibling_info))
 
+        # Stage B: live GeckoTerminal metrics on the best candidates only (free, but rate
+        # limited), BEFORE the costly Birdeye/RPC token-safety calls.
+        winners.sort(key=lambda w: w[0]["fees_tvl_pct"], reverse=True)
+        sem = asyncio.Semaphore(2)
+        checked = winners[: C.MAX_LIVE_CHECKS]
+        live_results = await asyncio.gather(
+            *[fetch_live_stats(client, m, sem) for m, _ in checked], return_exceptions=True
+        )
+        live_passed = []
+        fail_live = 0
+        for (m, sibling_info), live in zip(checked, live_results):
+            if not isinstance(live, dict):
+                fail_live += 1
+                continue
+            ok, fails = filter_pool_live(live)
+            if not ok:
+                fail_live += 1
+                print(f"[skip] {m['name']} {m['address'][:6]}: {'; '.join(fails)}")
+                continue
+            live_passed.append((m, sibling_info, live))
+
         enriched = []
-        skipped_no_spike = 0
-        for i in range(0, len(winners), BATCH_SIZE):
-            batch = winners[i : i + BATCH_SIZE]
+        fail_safety = 0
+        for i in range(0, len(live_passed), BATCH_SIZE):
+            batch = live_passed[i : i + BATCH_SIZE]
             results = await asyncio.gather(
-                *[enrich_winner(client, m, top10_cache) for m, _ in batch],
+                *[enrich_winner(client, m, top10_cache) for m, _, _ in batch],
                 return_exceptions=True,
             )
-            for (m, sibling_info), safety in zip(batch, results):
+            for (m, sibling_info, live), safety in zip(batch, results):
                 if not isinstance(safety, dict):
                     continue
-                safety_ok, safety_fails = check_token_safety(safety)
+                safety_ok, _ = check_token_safety(safety)
                 if not safety_ok:
+                    fail_safety += 1
                     continue
-                dex = safety  # DexScreener fields (volume_m5/h1/h6, buys/sells, price_change) live on safety
-                spike_ok, spike_reason = passes_spike_gate(m, dex)
-                if not spike_ok:
-                    skipped_no_spike += 1
-                    continue
-                tags = enrich_layer3_tags(m, dex)
+                # Live per-pool stats take precedence over the token-level DexScreener values.
+                safety.update({k: v for k, v in live.items() if v is not None})
                 enriched.append({
                     "metrics": m,
                     "safety": safety,
                     "sibling": sibling_info,
-                    "tags": tags,
+                    "live": live,
+                    "tags": enrich_layer3_tags(m, live),
                 })
 
         enriched.sort(key=lambda r: r["metrics"]["fees_tvl_pct"], reverse=True)
@@ -187,7 +191,7 @@ async def main():
 
         await send_telegram(
             client,
-            build_summary(total_scanned, len(enriched), fail_layer1, skipped_no_spike, skipped_cooldown, enriched[:3]),
+            build_summary(total_scanned, len(enriched), fail_layer1, fail_live, fail_safety, skipped_cooldown, enriched[:3]),
         )
 
     save_cache(cache)

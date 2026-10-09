@@ -122,11 +122,15 @@ def build_alert(result: dict) -> str:
 ━━━━━━━━━━━━━━━━━━━━━
 🏊 Pool Age        : {fmt_num_or_na(m['pool_age_days'], "{:.0f} hari")}
 💧 TVL             : {fmt_usd(m['tvl'])} {sig(m['tvl'], C.MIN_POOL_TVL)}
-🔄 Vol/TVL         : {m['vol_tvl_ratio']:.2f}x {sig(m['vol_tvl_ratio'], C.MIN_VOL_TVL_RATIO)}
-💸 Fee/TVL         : {m['fees_tvl_pct']:.1f}%/hari {sig(m['fees_tvl_pct'], C.MIN_FEE_TVL_PCT)}
-📋 Base Fee/Bin    : {fmt_num_or_na(m['base_fee_pct'])} / bin_step {m['bin_step']} {sig(m['base_fee_pct'], C.MIN_BASE_FEE_PCT)}
-{net_deposits_line}{sibling_line}📊 Volume 24h      : {fmt_usd(m['vol_24h'])}
-📊 Volume 6h       : {fmt_usd_or_na(s.get('volume_h6'))}
+📊 Volume 24h      : {fmt_usd(m['vol_24h'])} {sig(m['vol_24h'], C.MIN_VOLUME_24H_USD)}
+💸 Fee/TVL 24h     : {m['fees_tvl_pct']:.1f}% {sig(m['fees_tvl_pct'], C.MIN_FEE_TVL_PCT)}
+⏱️ Fee/TVL 1h      : {fmt_num_or_na(m.get('fees_tvl_1h_pct'))} {sig(m.get('fees_tvl_1h_pct'), C.MIN_FEE_TVL_1H_PCT)}
+🔁 Trades 1h       : {fmt_num_or_na(s.get('trades_1h'), "{:,}")} {sig(s.get('trades_1h'), C.MIN_TRADES_1H)}
+📈 Price Chg 1h    : {fmt_num_or_na(s.get('price_change_1h'), "{:+.1f}%")} {sig(s.get('price_change_1h'), C.MIN_PRICE_CHANGE_1H_PCT, C.MAX_PRICE_CHANGE_1H_PCT)}
+📈 Price Chg 5m    : {fmt_num_or_na(s.get('price_change_5m'), "{:+.1f}%")} {sig(s.get('price_change_5m'), C.MIN_PRICE_CHANGE_5M_PCT)}
+📉 Pullback 24h    : {fmt_num_or_na(s.get('pullback_24h_pct'), "{:.1f}%")} {sig(s.get('pullback_24h_pct'), C.MAX_PULLBACK_24H_PCT, rev=True)}
+📋 Base Fee/Bin    : {fmt_num_or_na(m['base_fee_pct'])} / bin_step {m['bin_step']}
+{net_deposits_line}{sibling_line}📊 Volume 6h       : {fmt_usd_or_na(s.get('volume_h6'))}
 🔁 Trades 24h      : {trades_str}
 ━━━━━━━━━━━━━━━━━━━━━
 🔗 <b>LINKS</b>
@@ -136,18 +140,19 @@ def build_alert(result: dict) -> str:
 ⚠️ DYOR — bukan financial advice"""
 
 
-def build_summary(total, passed, fail_layer1, skipped_no_spike, skipped_cooldown, top3) -> str:
+def build_summary(total, passed, fail_layer1, fail_live, fail_safety, skipped_cooldown, top3) -> str:
     now_wib = now_wib_str()
     top3_txt = "".join(
-        f"{i + 1}. {html.escape(r['safety'].get('symbol') or '?')} — Fee/TVL: {r['metrics']['fees_tvl_pct']:.1f}%/hari\n"
+        f"{i + 1}. {html.escape(r['safety'].get('symbol') or '?')} — Fee/TVL 24h: {r['metrics']['fees_tvl_pct']:.1f}%\n"
         for i, r in enumerate(top3)
     )
     return f"""📊 <b>LP SCOUT — RUN SUMMARY</b>
 {now_wib} WIB
 🔍 Di-scan          : {total} pool
 ✅ Lolos (alert)    : {passed}
-❌ Gagal Layer 1/2  : {fail_layer1} pasangan token
-⏭️ Skip spike gate  : {skipped_no_spike}
+❌ Gagal filter pool: {fail_layer1} pasangan token
+⏭️ Gagal filter live : {fail_live}
+🛡️ Gagal safety     : {fail_safety}
 🕒 Skip cooldown    : {skipped_cooldown}
 🏆 <b>Top Pool:</b>
 {top3_txt or "Tidak ada yang lolos."}📡 Running via GitHub Actions ✅"""

@@ -21,85 +21,35 @@ unreliable.
 - `send_test_alert.py` — sends fabricated preview alerts (`workflow_dispatch` only).
 - `test_screener.py` — unit tests for the filter layers (stdlib `unittest`, no extra deps).
 
-## Filter design — CEREBRO criteria
+## Filter design — an alert fires only if ALL of these match
 
-Named after the CEREBRO-USDG case study on the sibling Robinhood Chain (Uniswap V3/V4)
-bot: a genuinely profitable pool with TVL ~$100K, Vol/TVL ~7x/day, Fee/TVL ~14-15%/day,
-2% base fee, age 13 days, volume still accelerating. The design principle throughout:
-**a field unavailable from any data source is skipped for that one check, never treated
-as a failure** — missing data isn't bad data.
+Stage A uses data already in Meteora's `/pools` response (no extra API calls). Stage B
+uses GeckoTerminal's free per-pool endpoints and runs only on each token pair's
+sibling-selection winner (best `MAX_LIVE_CHECKS` by 24h Fee/TVL), before the costly
+Birdeye/RPC token-safety calls.
 
-### Layer 1 — hard filter, per individual pool (`screener.filter_pool_layer1`)
+| Stage | Metric | Rule | Env var | Source |
+|---|---|---|---|---|
+| A | Pool TVL | ≥ $10,000 | `MIN_POOL_TVL` | Meteora |
+| A | 24h volume | ≥ $100,000 | `MIN_VOLUME_24H_USD` | Meteora |
+| A | 1h Fee/TVL | ≥ 0.5% (0.005x) | `MIN_FEE_TVL_1H_PCT` | Meteora `fee_tvl_ratio[1h]` |
+| A | 24h Fee/TVL | ≥ 10% (0.1x) | `MIN_FEE_TVL_PCT` | Meteora `fee_tvl_ratio[24h]` |
+| B | 1h trades (buys+sells) | ≥ 10 | `MIN_TRADES_1H` | GeckoTerminal |
+| B | 1h price change | between -30% and +50% | `MIN_/MAX_PRICE_CHANGE_1H_PCT` | GeckoTerminal |
+| B | 24h pullback from high | ≤ 30% | `MAX_PULLBACK_24H_PCT` | GeckoTerminal hourly OHLCV (24 candles): (high − latest close) / high |
+| B | 5m price change | ≥ -3% | `MIN_PRICE_CHANGE_5M_PCT` | GeckoTerminal |
 
-| Metric | Minimum | Env var | Notes |
-|---|---|---|---|
-| TVL | ≥ $10,000 | `MIN_POOL_TVL` | |
-| Volume 24h / TVL | ≥ 2x/day | `MIN_VOL_TVL_RATIO` | |
-| Fee 24h / TVL | ≥ 10%/day | `MIN_FEE_TVL_PCT` | |
-| Base fee (Meteora's `pool_config.base_fee_pct`) | ≥ 2% | `MIN_BASE_FEE_PCT` | Skipped if the field is missing, not just zero |
+Stage B is **strict**: if GeckoTerminal can't supply a metric (e.g. a brand-new pool not
+yet indexed, or rate-limited), the pool fails rather than being alerted unverified.
+Price changes are for the non-SOL token (inverted if GeckoTerminal lists it as quote).
 
-Pool age is **not** a hard filter. A pool under `NEW_POOL_WARNING_DAYS` (default 1 day)
-old still passes and gets alerted — just with a "⚠️ Pool Baru" tag (Layer 3), never a
-rejection.
+Also applied: **one pool per token pair** (`select_best_sibling`: among Layer-A passers
+whose volume is ≥ `SIBLING_JOMPLANG_RATIO` of the busiest sibling, highest base fee wins,
+tie-break volume), and the existing **token safety** gate (mint/freeze authority, mcap,
+holders, top-10) on the final candidates.
 
-Active-liquidity (bin-level) Fee/TVL was investigated as a more accurate alternative to
-whole-pool Fee/TVL, but **Meteora's `datapi` API exposes no bin-level or active-liquidity
-data at all** (confirmed live on both `/pools` and `/pools/{address}` — same schema,
-neither has anything like `in_range_pct`, `total_lps`, `volatility`, or a bin-array
-endpoint). See Phase 2 backlog below.
-
-### Layer 2 — sibling-pool selection, per token pair (`screener.select_best_sibling`)
-
-Meteora often lists several pools for the same token pair at different `bin_step` values
-(the DLMM equivalent of Uniswap fee tiers). For each pair:
-
-1. Collect ALL sibling pools (including ones that fail Layer 1 — used only as volume
-   comparables).
-2. `max_volume_sibling` = highest 24h volume among all siblings.
-3. A Layer-1 passer with `volume_ratio` (its volume / max_volume_sibling) below
-   `SIBLING_JOMPLANG_RATIO` (default 0.5) is "jomplang" (lopsided) and dropped from the
-   priority list.
-4. Among the non-lopsided candidates, pick the highest base fee / bin_step, tie-break on
-   volume.
-5. If every candidate is lopsided, fall back to the highest-volume Layer-1 passer,
-   ignoring bin_step.
-6. Only that one winner per token pair is ever considered for an alert.
-
-There's no `/pools/groups` endpoint to fetch siblings server-side (confirmed 400/404
-live) — grouping is done client-side from the same bulk `/pools` fetch used for
-scanning, so it costs no extra API calls.
-
-### Layer 3 — informational tags, never a rejection reason (`screener.enrich_layer3_tags`)
-
-- 🔥 **Momentum naik** — volume 1h vs. the token's own hourly-average-of-24h, shown when
-  the ratio clears `MOMENTUM_RATIO_THRESHOLD` (default 1.5x).
-- ⚠️ **Pool Baru** — pool age < `NEW_POOL_WARNING_DAYS`.
-- 💡 **Fee vs Drawdown** — Fee/TVL vs. 24h price drawdown, when DexScreener's
-  `priceChange.h24` is available and negative. Dormant (not shown) otherwise.
-
-### Final gate — short-term volume spike (`main.passes_spike_gate`)
-
-Before sending, the pool's 5-minute volume (DexScreener's finest granularity — Meteora
-itself has no `5m` window) must be:
-
-- ≥ `SPIKE_FLOOR_USD` (default $7,500 — deliberately low; a $50K floor was validated as
-  far too strict on the Robinhood Chain bot, since a $100K-TVL pool rarely clears $50K in
-  a single 5-minute window even while genuinely active), **and**
-- ≥ `SPIKE_MULTIPLIER`x (default 1.5x) the token's own average 5-minute volume
-  (`volume_h1 / 12` as the baseline).
-
-**Bypass**: a pool already proven "kencang" over a full 24h — `Vol/TVL ≥
-SPIKE_BYPASS_VOL_TVL_RATIO` (default 5x/day) **and** `Fee/TVL ≥
-SPIKE_BYPASS_FEE_TVL_PCT` (default 10%/day) — skips this check entirely
-(`screener.is_proven_by_pool_quality`), so a proven pool is never missed just because the
-specific window it got checked in happened to be quiet.
-
-### Token safety (separate axis, applied only to the Layer 2 winner)
-
-Mint/freeze authority, market cap range, holder count, top-10 concentration
-(`screener.check_token_safety`) — unchanged from the bot's original design, but now runs
-**only on each pair's Layer 2 winner** instead of every candidate pool, since it's the
-expensive part (Birdeye/RPC calls).
+Informational tags (never reject): 🔥 momentum (1h volume ≥ 1.5x hourly average of 24h),
+⚠️ Pool Baru (< `NEW_POOL_WARNING_DAYS`), 💡 Fee vs Drawdown.
 
 ## Phase 2 backlog (confirmed unavailable, not attempted)
 
