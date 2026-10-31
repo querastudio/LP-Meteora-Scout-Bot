@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
-cooldown_cache.json
-bot_state.json
-token_safety_cache.json
 .env
+data/
+*.db
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

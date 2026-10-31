@@ -1,70 +1,105 @@
-# LP Scout Bot — Meteora DLMM (Solana)
+# LP Scout — Meteora DLMM (Solana)
 
-Scans Meteora DLMM X/SOL pools every 5 minutes and sends Telegram alerts for pools worth
-providing liquidity to. Runs on GitHub Actions (`.github/workflows/lp_scout.yml`), with an
-external cron-job.org pinger to work around GitHub's native `schedule:` cron being
-unreliable.
+Bot Telegram yang **hanya memindai dan merekomendasikan** pool Meteora DLMM untuk strategi LP
+single-sided SOL (Bid-Ask, range -70%). Bot tidak memegang private key dan tidak membuat transaksi.
 
-## Architecture
+## Cara kerja
 
-- `apis/meteora.py` — fetches pools from Meteora's `datapi` REST API
-  (`https://dlmm.datapi.meteora.ag`) and maps the raw `PoolResponse` schema into a flat
-  metrics dict (`parse_pool_metrics`).
-- `apis/token_safety.py` — per-token checks: DexScreener (volume windows, txns, price
-  change), GeckoTerminal (mcap fallback), on-chain RPC (mint/freeze authority via
-  Alchemy → Helius → public RPC fallback chain), Birdeye (top-10 holder concentration).
-- `screener.py` — the CEREBRO filter layers (see below).
-- `main.py` — orchestration: fetch → group by token pair → Layer 1 + Layer 2 (cheap, no
-  API calls) → expensive per-token checks on the winner only → spike gate → Layer 3 tags
-  → send.
-- `utils/formatter.py` — builds the Telegram HTML alert + run-summary messages.
-- `send_test_alert.py` — sends fabricated preview alerts (`workflow_dispatch` only).
-- `test_screener.py` — unit tests for the filter layers (stdlib `unittest`, no extra deps).
+1. Ambil daftar pool (`dlmm.datapi.meteora.ag/pools`, 6 halaman × 50, urut volume 24 jam).
+2. **Penyaringan murah**: SOL di salah satu sisi, `bin_step ≥ 80`, TVL ≥ $10.000, bukan blacklist,
+   bukan aset besar/stablecoin (daftar bisa diubah lewat `EXCLUDED_SYMBOLS`). Ambil 20 dengan Fee/TVL tertinggi.
+3. Untuk 20 kandidat: candle 5 menit 24 jam (3 jendela × 8 jam) → 15 menit → metrik → label.
+4. Pool yang mendapat label dicek keamanannya. Pool yang pernah aktif selalu dihitung ulang
+   walau sudah keluar dari 20 besar, supaya penurunannya terdeteksi.
 
-## Filter design — an alert fires only if ALL of these match
+### Metrik (modul murni `lpscout/metrics.py`)
 
-Stage A uses data already in Meteora's `/pools` response (no extra API calls). Stage B
-uses GeckoTerminal's free per-pool endpoints and runs only on each token pair's
-sibling-selection winner (best `MAX_LIVE_CHECKS` by 24h Fee/TVL), before the costly
-Birdeye/RPC token-safety calls.
+| Metrik | Rumus |
+|---|---|
+| feeYield | (fees24h − protocol_fees24h) / TVL |
+| σ harian | stdev(log return close 15m) × √96 |
+| LVR | σ² / 8 |
+| net edge | feeYield − LVR · fee/LVR = feeYield / LVR |
+| aktivitas | candle 15m dengan volume > 0 / 96 |
+| konsentrasi | volume candle 15m terbesar / volume 24 jam |
+| laju 6j | volume 6 jam terakhir × 4 / volume 24 jam |
 
-| Stage | Metric | Rule | Env var | Source |
-|---|---|---|---|---|
-| A | Pool TVL | ≥ $10,000 | `MIN_POOL_TVL` | Meteora |
-| A | 24h volume | ≥ $100,000 | `MIN_VOLUME_24H_USD` | Meteora |
-| A | 1h Fee/TVL | ≥ 0.5% (0.005x) | `MIN_FEE_TVL_1H_PCT` | Meteora `fee_tvl_ratio[1h]` |
-| A | 24h Fee/TVL | ≥ 10% (0.1x) | `MIN_FEE_TVL_PCT` | Meteora `fee_tvl_ratio[24h]` |
-| B | 1h trades (buys+sells) | ≥ 10 | `MIN_TRADES_1H` | GeckoTerminal |
-| B | 1h price change | between -30% and +50% | `MIN_/MAX_PRICE_CHANGE_1H_PCT` | GeckoTerminal |
-| B | 24h pullback from high | ≤ 30% | `MAX_PULLBACK_24H_PCT` | GeckoTerminal hourly OHLCV (24 candles): (high − latest close) / high |
-| B | 5m price change | ≥ -3% | `MIN_PRICE_CHANGE_5M_PCT` | GeckoTerminal |
+"Bad print" (close menyimpang > 70% dari **kedua** tetangga) diganti rata-rata tetangga.
+Data < 16 candle 15m → semua metrik berbasis candle `null` (tampil `n/a`, bukan 0).
 
-Stage B is **strict**: if GeckoTerminal can't supply a metric (e.g. a brand-new pool not
-yet indexed, or rate-limited), the pool fails rather than being alerted unverified.
-Price changes are for the non-SOL token (inverted if GeckoTerminal lists it as quote).
+### Label (nilai dari backtest 211 pool; bisa diubah lewat `/set` atau env)
 
-Also applied: **one pool per token pair** (`select_best_sibling`: among Layer-A passers
-whose volume is ≥ `SIBLING_JOMPLANG_RATIO` of the busiest sibling, highest base fee wins,
-tie-break volume), and the existing **token safety** gate (mint/freeze authority, mcap,
-holders, top-10) on the final candidates.
+| Label | Syarat | Ukuran |
+|---|---|---|
+| ⭐ ideal | feeYield ≥ 20%, net edge ≥ 10%, aktivitas ≥ 90%, konsentrasi < 10% | 100% |
+| ✅✅ bagus | feeYield ≥ 10%, net edge ≥ 5%, aktivitas ≥ 90%, konsentrasi < 10%, laju 6j ≥ 50% | 75% |
+| ✅ minimal | feeYield ≥ 5%, net edge ≥ 2%, aktivitas ≥ 90%, konsentrasi < 10%, laju 6j ≥ 50% | 50% |
+| ❌ tolak | selain itu (syarat yang kurang disimpan dan ditampilkan) | – |
 
-Informational tags (never reject): 🔥 momentum (1h volume ≥ 1.5x hourly average of 24h),
-⚠️ Pool Baru (< `NEW_POOL_WARNING_DAYS`), 💡 Fee vs Drawdown.
+### Keamanan (terpisah dari label)
 
-## Phase 2 backlog (confirmed unavailable, not attempted)
+Mint authority dan freeze authority harus dicabut, dan top-10 holder < 30% (pemilik off-curve/PDA
+seperti pool & vault diabaikan; akun milik satu pemilik dijumlahkan). Gagal → status **risiko**
+dan pool **tidak pernah direkomendasikan**, apa pun labelnya. Tidak bisa dicek → **belum terverifikasi**
+(tetap dilaporkan, tapi ditandai). RugCheck hanya catatan tambahan; kegagalannya tidak memblokir.
 
-- **Bin-level / active-liquidity data.** No endpoint on Meteora's `datapi` exposes
-  per-bin liquidity or active-bin position — whole-pool TVL is the only TVL figure
-  available for Fee/TVL.
-- **`in_range_pct` / `open_positions` / `total_lps` / `volatility`.** Present in some
-  third-party tools' UI (e.g. a screenshot the user shared showing "Total LPs",
-  "Volatility", "Positions Created") but not reproducible from Meteora's own API, Jupiter,
-  Birdeye, or DexScreener in live testing — likely computed by that tool from its own
-  historical/on-chain indexing, not a public API field.
-- **`/pools/groups` sibling endpoint.** Returns 400/404 live; sibling grouping is done
-  client-side instead (see Layer 2).
+## Perintah Telegram (hanya `TELEGRAM_OWNER_ID`; yang lain diabaikan diam-diam)
 
-## Environment variables
+| Perintah | Fungsi |
+|---|---|
+| `/scan` | Pindai sekarang (tidak memicu alert, agar alert terjadwal tidak terlewat) |
+| `/top` | Hasil scan terakhir |
+| `/pool <alamat>` | Detail satu pool, termasuk syarat yang kurang dan hasil penyaringan awal |
+| `/set` · `/set <nama> <nilai>` | Lihat / ubah ambang (disimpan di SQLite, berlaku juga setelah restart) |
+| `/status` | Scan terakhir, jumlah pool, sumber data yang gagal, jadwal berikutnya |
+| `/help` | Bantuan |
 
-See `config.py` for the full list with inline comments; all CEREBRO thresholds above have
-a corresponding env var with the same default shown in the table.
+Setiap perintah dibatasi 25 detik: bila lebih lama, bot membalas "masih memproses" lalu mengirim
+hasilnya setelah selesai. Scan otomatis tiap `SCAN_MINUTES` (15). Alert dikirim **hanya** untuk pool yang
+baru naik ke minimal/bagus/ideal atau naik label, cooldown 2 jam per pool; pool yang turun ke tolak
+dikeluarkan dari daftar aktif dan diberitahukan sekali.
+
+## Menjalankan
+
+Butuh proses yang **berjalan terus** (long-poll Telegram + scheduler + SQLite), bukan job cron.
+
+```bash
+cp .env.example .env     # isi TELEGRAM_BOT_TOKEN dan TELEGRAM_OWNER_ID (RPC_URL pribadi disarankan)
+```
+
+**Docker (disarankan)**
+```bash
+docker compose up -d --build && docker compose logs -f
+```
+Database ada di volume `lpscout-data`.
+
+**Tanpa Docker / systemd**
+```bash
+python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
+set -a; . ./.env; set +a; .venv/bin/python -m lpscout
+```
+Unit systemd: `ExecStart=/opt/lpscout/.venv/bin/python -m lpscout`, `EnvironmentFile=/opt/lpscout/.env`,
+`WorkingDirectory=/opt/lpscout`, `Restart=always`.
+
+> Workflow GitHub Actions cron versi lama sudah dihapus (job Actions tidak bisa menjalankan bot
+> yang hidup terus). Actions kini hanya menjalankan CI. Hentikan pinger cron-job.org lama bila masih ada.
+
+## Pengembangan
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+ruff check lpscout tests && mypy && pytest -q
+```
+
+Struktur: `lpscout/metrics.py`, `labels.py`, `alerts.py` (murni) · `sources/` (Meteora, keamanan) ·
+`http.py` (timeout/retry/cache) · `scanner.py` · `store.py` (SQLite) · `formatter.py` · `bot.py` · `telegram.py`.
+Fixture payload Meteora asli ada di `tests/fixtures/`.
+
+## Asumsi dan keterbatasan
+
+- Volume 24 jam untuk konsentrasi/laju 6j memakai **jumlah volume candle** (konsisten dengan pembilangnya),
+  bukan field `volume.24h` pool. σ memakai simpangan baku sampel.
+- Setiap candle 15m yang tidak ada dianggap tanpa volume; return dihitung antar candle yang ada.
+- `getTokenLargestAccounts` hanya mengembalikan 20 akun terbesar; setelah PDA dibuang bisa tersisa < 10
+  pemilik, sehingga top-10% adalah batas bawah. RPC publik sering membatasi metode ini — pakai `RPC_URL` pribadi.
+- Hasil keamanan di-cache 6 jam; scan gagal sebagian dicatat di `/status`.
